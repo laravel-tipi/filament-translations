@@ -1,4 +1,4 @@
-{{-- src/resources/views/components/translations-manager.blade.php --}}
+{{-- resources/views/components/translations-manager.blade.php --}}
 
 <div>
     {{ $this->table }}

@@ -1,4 +1,4 @@
-{{-- src/resources/views/tables/columns/translations-column.blade.php --}}
+{{-- resources/views/tables/columns/translations-column.blade.php --}}
 
 <ul class="flex items-center gap-3 px-3 py-4">
     @foreach ($column->getLocales() as $locale)

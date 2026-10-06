@@ -16,9 +16,9 @@ use Tipi\Translations\TranslationManager;
 
 class TranslationsColumn extends Column
 {
-    protected string $view = 'localization.filament.tables.columns.translations-column';
+    protected string $view = 'tipi-filament-translations::tables.columns.translations-column';
 
-    protected string $headerView = 'localization.filament.tables.columns.translations-column-header';
+    protected string $headerView = 'tipi-filament-translations::tables.columns.translations-column-header';
 
     protected (Model&TranslatableModel)|Closure|null $translatableRecord = null;
 

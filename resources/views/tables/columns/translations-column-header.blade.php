@@ -1,4 +1,4 @@
-{{-- src/resources/views/tables/columns/translations-column-header.blade.php --}}
+{{-- resources/views/tables/columns/translations-column-header.blade.php --}}
 
 <ul class="flex items-center gap-3">
     @foreach ($column->getLocales() as $locale)

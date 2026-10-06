@@ -154,7 +154,7 @@ class TranslationsManager extends Component implements HasActions, HasSchemas, H
     public function render(): View
     {
         return view(
-            'localization.filament.components.translations-manager',
+            'tipi-filament-translations::components.translations-manager',
         );
     }
 
