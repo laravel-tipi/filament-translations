@@ -1,0 +1,61 @@
+{
+  "name": "laravel-tipi/filament-translations",
+  "description": "Filament integration for laravel-tipi/translations",
+  "keywords": [
+    "laravel",
+    "filament",
+    "translations",
+    "localization",
+    "i18n"
+  ],
+  "type": "library",
+  "license": "MIT",
+  "authors": [
+    {
+      "name": "Irakli",
+      "email": "iraklikevkhishvili@gmail.com"
+    }
+  ],
+  "require": {
+    "php": "^8.5",
+    "filament/filament": "^5.10",
+    "laravel-tipi/translations": "^0.1.1",
+    "stijnvanouplines/blade-country-flags": "^1.0.9"
+  },
+  "autoload": {
+    "psr-4": {
+      "Tipi\\Translations\\Filament\\": "src/"
+    }
+  },
+  "autoload-dev": {
+    "psr-4": {
+      "Tipi\\Translations\\Filament\\Tests\\": "tests/"
+    }
+  },
+  "extra": {
+    "laravel": {
+      "providers": [
+        "Tipi\\Translations\\Filament\\FilamentTranslationsServiceProvider"
+      ]
+    }
+  },
+  "scripts": {
+    "test": "pest",
+    "format": "pint",
+    "format:test": "pint --test",
+    "check": [
+      "@format:test",
+      "@test"
+    ]
+  },
+  "config": {
+    "sort-packages": true,
+    "allow-plugins": {
+      "pestphp/pest-plugin": true
+    }
+  },
+  "support": {
+    "issues": "https://github.com/laravel-tipi/filament-translations/issues",
+    "source": "https://github.com/laravel-tipi/filament-translations"
+  }
+}
