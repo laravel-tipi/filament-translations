@@ -35,7 +35,7 @@ class TranslationsColumn extends Column
                             'column' => $this,
                         ],
                     )->render(),
-                ),
+                )
             );
     }
 
@@ -88,8 +88,7 @@ class TranslationsColumn extends Column
         Model&TranslatableModel $record,
         string $localeCode,
     ): bool {
-        return $this->getTranslationManager()->exists(
-            translatable: $record,
+        return $record->translationExists(
             localeCode: $localeCode,
         );
     }
