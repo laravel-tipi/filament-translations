@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 use Illuminate\Database\Eloquent\Model;
-use LogicException;
+use Tipi\Translations\Concerns\HasLocalizedTranslations;
 use Tipi\Translations\Contracts\TranslatableModel;
 use Tipi\Translations\Filament\Actions\DeleteTranslationAction;
 use Tipi\Translations\Filament\Actions\EditTranslationAction;
@@ -12,6 +12,8 @@ use Tipi\Translations\Filament\Tables\Columns\TranslationsColumn;
 
 final class TestTranslatableModel extends Model implements TranslatableModel
 {
+    use HasLocalizedTranslations;
+
     public $incrementing = false;
 
     protected $keyType = 'string';
