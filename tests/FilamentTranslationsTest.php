@@ -29,7 +29,7 @@ it('uses stable default action names', function (): void {
 });
 
 it('resolves an explicitly configured translatable record', function (): void {
-    $record = new TestTranslatableModel();
+    $record = new TestTranslatableModel;
     $record->setAttribute($record->getKeyName(), 'wine-1');
 
     $action = TranslateAction::make()
@@ -40,7 +40,7 @@ it('resolves an explicitly configured translatable record', function (): void {
 });
 
 it('supports a custom record title', function (): void {
-    $record = new TestTranslatableModel();
+    $record = new TestTranslatableModel;
 
     $action = DeleteTranslationAction::make()
         ->translatable($record)
