@@ -16,7 +16,7 @@ final class FilamentTranslationsServiceProvider extends ServiceProvider
     public function boot(): void
     {
         $this->loadViewsFrom(
-            __DIR__ . '/../resources/views',
+            __DIR__.'/../resources/views',
             'tipi-filament-translations',
         );
     }

@@ -9,7 +9,7 @@ use Filament\Tables\Columns\Column;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Collection;
 use Illuminate\Support\HtmlString;
-use Tipi\Localization\Locale;
+use Tipi\Support\Locale;
 use Tipi\Translations\Contracts\LocaleProvider;
 use Tipi\Translations\Contracts\TranslatableModel;
 use Tipi\Translations\TranslationManager;

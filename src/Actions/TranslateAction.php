@@ -19,12 +19,12 @@ use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Blade;
 use JsonException;
 use LogicException;
-use Tipi\Localization\Locale;
+use Tipi\Filament\Validation\FilamentValidator;
+use Tipi\Support\Locale;
 use Tipi\Translations\Actions\CreateTranslation;
 use Tipi\Translations\Contracts\LocaleProvider;
 use Tipi\Translations\Contracts\TranslatableModel;
 use Tipi\Translations\Exceptions\TranslationAlreadyExistsException;
-use Tipi\Translations\Filament\Support\FilamentValidator;
 use Tipi\Translations\Translation;
 use Tipi\Translations\TranslationManager;
 
