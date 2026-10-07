@@ -19,13 +19,15 @@
   "require": {
     "php": "^8.5",
     "filament/filament": "^5.10",
-    "laravel-tipi/filament-support": "^1.0.2",
+    "laravel-tipi/support": "^1.0",
     "laravel-tipi/translations": "^0.1",
     "stijnvanouplines/blade-country-flags": "^1.0.9"
   },
   "require-dev": {
-    "laravel/pint": "^1.0",
-    "pestphp/pest": "^4.0"
+    "laravel/pint": "^1.32",
+    "orchestra/testbench": "^11.3",
+    "pestphp/pest": "^5.3",
+    "pestphp/pest-plugin-laravel": "^5.0"
   },
   "autoload": {
     "psr-4": {
