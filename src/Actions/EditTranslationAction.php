@@ -121,9 +121,8 @@ class EditTranslationAction extends Action
             );
         }
 
-        $translation = $this->getTranslationManager()->get(
-            translatable: $record,
-            localeCode: $this->getLocaleCode(),
+        $translation = $record->getTranslation(
+            $this->getLocaleCode(),
         );
 
         if ($translation === null) {
@@ -160,10 +159,7 @@ class EditTranslationAction extends Action
                 continue;
             }
 
-            $translation = $this->getTranslationManager()->get(
-                translatable: $record,
-                localeCode: $localeCode,
-            );
+            $translation = $record->getTranslation($localeCode);
 
             if ($translation !== null) {
                 return $translation;
@@ -217,7 +213,7 @@ class EditTranslationAction extends Action
         parent::setUp();
 
         $this
-            ->label('Edit Translation')
+            ->label('Edit')
             ->icon('heroicon-c-pencil-square')
             ->tableIcon('heroicon-c-pencil-square')
             ->color('primary')
@@ -354,10 +350,5 @@ class EditTranslationAction extends Action
     protected function getLocaleProvider(): LocaleProvider
     {
         return resolve(LocaleProvider::class);
-    }
-
-    protected function getTranslationManager(): TranslationManager
-    {
-        return resolve(TranslationManager::class);
     }
 }

@@ -106,7 +106,7 @@ class DeleteTranslationAction extends Action
         parent::setUp();
 
         $this
-            ->label('Delete Translation')
+            ->label('Delete')
             ->icon('heroicon-o-trash')
             ->tableIcon('heroicon-o-trash')
             ->color('danger')

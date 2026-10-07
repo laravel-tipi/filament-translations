@@ -12,7 +12,6 @@ use Illuminate\Support\HtmlString;
 use Tipi\Support\Locale;
 use Tipi\Translations\Contracts\LocaleProvider;
 use Tipi\Translations\Contracts\TranslatableModel;
-use Tipi\Translations\TranslationManager;
 
 class TranslationsColumn extends Column
 {
@@ -98,10 +97,5 @@ class TranslationsColumn extends Column
     private function getLocaleProvider(): LocaleProvider
     {
         return resolve(LocaleProvider::class);
-    }
-
-    private function getTranslationManager(): TranslationManager
-    {
-        return resolve(TranslationManager::class);
     }
 }

@@ -26,7 +26,6 @@ use Tipi\Translations\Contracts\LocaleProvider;
 use Tipi\Translations\Contracts\TranslatableModel;
 use Tipi\Translations\Exceptions\TranslationAlreadyExistsException;
 use Tipi\Translations\Translation;
-use Tipi\Translations\TranslationManager;
 
 class TranslateAction extends Action
 {
@@ -133,19 +132,11 @@ class TranslateAction extends Action
             );
         }
 
-        $translation = $this->getTranslationManager()->get(
-            translatable: $record,
-            localeCode: $this->getLocaleProvider()->current()->code,
+        return $record->getTranslation(
+            $this->getLocaleProvider()->current()->code,
+        ) ?? $record->getTranslation(
+            $this->getLocaleProvider()->default()->code,
         );
-
-        if ($translation === null) {
-            $translation = $this->getTranslationManager()->get(
-                translatable: $record,
-                localeCode: $this->getLocaleProvider()->default()->code,
-            );
-        }
-
-        return $translation;
     }
 
     protected function hasSingleMissingLocale(): bool
@@ -255,10 +246,7 @@ class TranslateAction extends Action
         $localeCode = $this->getLocaleCode();
 
         if ($localeCode !== null) {
-            return ! $this->getTranslationManager()->exists(
-                translatable: $record,
-                localeCode: $localeCode,
-            );
+            return ! $record->translationExists($localeCode);
         }
 
         return $this->getMissingLocales()->isNotEmpty();
@@ -431,11 +419,6 @@ class TranslateAction extends Action
             ->all();
     }
 
-    private function getTranslationManager(): TranslationManager
-    {
-        return resolve(TranslationManager::class);
-    }
-
     private function getLocaleProvider(): LocaleProvider
     {
         return resolve(LocaleProvider::class);
@@ -449,14 +432,11 @@ class TranslateAction extends Action
             return collect();
         }
 
-        $translations = $this->getTranslationManager();
-
         return $this->getLocaleProvider()
             ->supported()
             ->reject(
-                fn ($locale): bool => $translations->exists(
-                    translatable: $record,
-                    localeCode: $locale->code,
+                fn ($locale): bool => $record->translationExists(
+                    $locale->code,
                 ),
             );
     }

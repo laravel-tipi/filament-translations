@@ -27,7 +27,6 @@ use Tipi\Translations\Filament\Actions\EditTranslationAction;
 use Tipi\Translations\Filament\Actions\TranslateAction;
 use Tipi\Translations\Filament\Contracts\HasTranslationSchema;
 use Tipi\Translations\Translation;
-use Tipi\Translations\TranslationManager;
 
 class TranslationsManager extends Component implements HasActions, HasSchemas, HasTable
 {
@@ -92,10 +91,8 @@ class TranslationsManager extends Component implements HasActions, HasSchemas, H
             ->current()
             ->code;
 
-        return $this->getTranslationManager()
-            ->getAll(
-                translatable: $this->getTranslatableRecord(),
-            )
+        return $this->getTranslatableRecord()
+            ->getTranslations()
             ->reject(
                 fn (Translation $translation): bool => $translation->localeCode === $currentLocaleCode,
             )
@@ -169,10 +166,5 @@ class TranslationsManager extends Component implements HasActions, HasSchemas, H
     private function getLocaleProvider(): LocaleProvider
     {
         return resolve(LocaleProvider::class);
-    }
-
-    private function getTranslationManager(): TranslationManager
-    {
-        return resolve(TranslationManager::class);
     }
 }
