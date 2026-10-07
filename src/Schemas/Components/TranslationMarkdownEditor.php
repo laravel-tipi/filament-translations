@@ -21,7 +21,7 @@ class TranslationMarkdownEditor extends MarkdownEditor implements TranslationFie
         $this->setUpTranslation();
     }
 
-     public function getSourceEntry(string $name): Component
+    public function getSourceEntry(string $name): Component
     {
         return TextEntry::make($name)
             ->markdown();

@@ -11,6 +11,7 @@ use Tipi\Translations\Contracts\TranslatableModel;
 trait HasTranslation
 {
     use HasTranslationValidation;
+
     protected ?string $translationLocaleCode = null;
 
     protected bool $shouldHydrateTranslation = true;
