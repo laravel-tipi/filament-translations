@@ -19,8 +19,8 @@ use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Blade;
 use JsonException;
 use LogicException;
-use Tipi\Filament\Validation\FilamentValidator;
 use Tipi\Support\Locale;
+use Tipi\Support\Validation\Validator;
 use Tipi\Translations\Actions\CreateTranslation;
 use Tipi\Translations\Contracts\LocaleProvider;
 use Tipi\Translations\Contracts\TranslatableModel;
@@ -364,10 +364,10 @@ class TranslateAction extends Action
                             localeCode: $localeCode,
                         );
                     } catch (TranslationAlreadyExistsException $exception) {
-                        FilamentValidator::fail(
+                        Validator::fail(
                             field: 'locale_code',
                             message: $exception->getMessage(),
-                            statePath: 'mountedActions.0.data',
+                            path: 'mountedActions.0.data',
                         );
                     }
 
