@@ -12,4 +12,9 @@ interface HasTranslationSchema
      * @return array<string, Closure>
      */
     public static function getTranslationSchema(): array;
+
+    /**
+     * @return array<string, array<mixed>>
+     */
+    public static function getTranslationRules(): array;
 }

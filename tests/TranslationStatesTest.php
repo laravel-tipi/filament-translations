@@ -36,6 +36,11 @@ final class StatefulTestModel extends StateTestModel implements HasTranslationSt
 
 final class StateTestResource implements HasTranslationSchema
 {
+    public static function getTranslationRules(): array
+    {
+        return [];
+    }
+
     public static function getTranslationSchema(): array
     {
         return [];

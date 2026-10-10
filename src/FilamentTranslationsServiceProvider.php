@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tipi\Translations\Filament;
 
+use Filament\Forms\Components\Field;
 use Filament\Support\Assets\Css;
 use Filament\Support\Facades\FilamentAsset;
 use Filament\Tables\Table;
@@ -11,7 +12,10 @@ use Illuminate\Support\ServiceProvider;
 use LogicException;
 use Tipi\Translations\Filament\Actions\EditTranslationAction;
 use Tipi\Translations\Filament\Actions\TranslateAction;
+use Tipi\Translations\Filament\Components\TranslationsManager;
 use Tipi\Translations\Filament\Contracts\HasTranslationSchema;
+use Tipi\Translations\Filament\Schemas\Components\Contracts\TranslationField;
+use Tipi\Translations\Filament\Schemas\Components\TranslationGroup;
 use Tipi\Translations\Filament\Tables\Columns\TranslationsColumn;
 
 final class FilamentTranslationsServiceProvider extends ServiceProvider
@@ -23,6 +27,7 @@ final class FilamentTranslationsServiceProvider extends ServiceProvider
 
     public function boot(): void
     {
+        $this->registerTranslationRules();
         $this->registerTableMacros();
 
         $this->loadViewsFrom(
@@ -36,6 +41,41 @@ final class FilamentTranslationsServiceProvider extends ServiceProvider
                 __DIR__.'/../resources/css/filament-translations.css',
             ),
         ], package: 'laravel-tipi/filament-translations');
+    }
+
+    private function registerTranslationRules(): void
+    {
+        Field::configureUsing(function (Field $field): void {
+            $field->rules(function (Field $component, $livewire): array {
+                $resource = match (true) {
+                    $livewire instanceof TranslationsManager => $livewire->resource,
+                    method_exists($livewire, 'getResource') => $livewire::getResource(),
+                    default => null,
+                };
+
+                if ($resource === null || ! is_subclass_of($resource, HasTranslationSchema::class)) {
+                    return [];
+                }
+
+                if (! $component instanceof TranslationField) {
+                    $parent = $component->getContainer()->getParentComponent();
+
+                    while ($parent !== null && ! $parent instanceof TranslationGroup) {
+                        $parent = $parent->getContainer()->getParentComponent();
+                    }
+
+                    if ($parent === null) {
+                        return [];
+                    }
+                }
+
+                if (! preg_match('/(?:^|\.)(?:translation|target_translation|source_translation)\.(.+)$/', $component->getStatePath(), $matches)) {
+                    return [];
+                }
+
+                return $resource::getTranslationRules()[$matches[1]] ?? [];
+            });
+        });
     }
 
     private function registerTableMacros(): void
