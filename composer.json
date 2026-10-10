@@ -20,7 +20,7 @@
     "php": "^8.5",
     "filament/filament": "^5.10",
     "laravel-tipi/support": "^1.0",
-    "laravel-tipi/translations": "^0.1",
+    "laravel-tipi/translations": "^0.1.19",
     "stijnvanouplines/blade-country-flags": "^1.0.9"
   },
   "require-dev": {

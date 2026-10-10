@@ -59,6 +59,11 @@ abstract class TranslationStatesTestCase extends TestCase
         ]);
     }
 
+    protected function defineDatabaseMigrations(): void
+    {
+        $this->loadMigrationsFrom(__DIR__.'/../vendor/laravel-tipi/translations/database/migrations');
+    }
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -68,7 +73,6 @@ abstract class TranslationStatesTestCase extends TestCase
         $locales->shouldReceive('current')->andReturn($locale);
         $this->app->instance(LocaleProvider::class, $locales);
 
-        $this->artisan('migrate')->assertExitCode(0);
     }
 
     protected function translationTable(Model $record): Table
