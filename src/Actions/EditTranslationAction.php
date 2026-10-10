@@ -325,7 +325,7 @@ class EditTranslationAction extends Action
                 Action::make('saveSourceTranslation')
                     ->label('Save Source')
                     ->action(function (Get $get) use ($container): void {
-                        $container->validateSource();
+                        $attributes = $container->getSourceState();
 
                         $localeCode = $get('source_locale_code');
 
@@ -335,19 +335,19 @@ class EditTranslationAction extends Action
 
                         $this->updateTranslation(
                             localeCode: $localeCode,
-                            attributes: $get('source_translation'),
+                            attributes: $attributes,
                         );
                     }),
             ])
             ->targetFooter([
                 Action::make('saveTargetTranslation')
                     ->label('Save Translation')
-                    ->action(function (Get $get) use ($container): void {
-                        $container->validateTarget();
+                    ->action(function () use ($container): void {
+                        $attributes = $container->getTargetState();
 
                         $this->updateTranslation(
                             localeCode: $this->getLocaleCode(),
-                            attributes: $get('target_translation'),
+                            attributes: $attributes,
                         );
                     }),
             ]);

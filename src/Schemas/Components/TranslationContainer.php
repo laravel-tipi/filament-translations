@@ -165,66 +165,57 @@ class TranslationContainer extends Component
         return $this->getChildSchema('target_footer');
     }
 
-    /**
-     * @param  array<Schema|null>  $schemas
-     */
-    protected function validateSchemas(array $schemas): void
+    public function getTargetState(): array
     {
-        $rules = [];
-        $messages = [];
-        $attributes = [];
+        return $this->getTranslationState('target');
+    }
+
+    public function getSourceState(): array
+    {
+        return $this->getTranslationState('source');
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    protected function getTranslationState(string $side): array
+    {
+        return $this->getTranslationSchema($side)->getState()["{$side}_translation"] ?? [];
+    }
+
+    protected function getTranslationSchema(string $side): Schema
+    {
+        $schemas = [
+            $side === 'target' ? $this->getTargetLocaleSchema() : $this->getSourceLocaleSchema(),
+            ...array_map(
+                fn (string $row): ?Schema => $side === 'target'
+                    ? $this->getTargetContentSchema($row)
+                    : $this->getSourceContentSchema($row),
+                $this->getContentRows(),
+            ),
+        ];
+
+        $components = [];
 
         foreach ($schemas as $schema) {
-            if ($schema === null) {
-                continue;
+            foreach ($schema?->getComponents(withActions: false, withHidden: true) ?? [] as $component) {
+                // Preserve the rendered fields' containers and cached hierarchy.
+                $components[] = $component->getClone();
             }
-
-            $rules = [
-                ...$rules,
-                ...$schema->getValidationRules(),
-            ];
-
-            $messages = [
-                ...$messages,
-                ...$schema->getValidationMessages(),
-            ];
-
-            $attributes = [
-                ...$attributes,
-                ...$schema->getValidationAttributes(),
-            ];
         }
 
-        if ($rules === []) {
-            return;
-        }
-
-        $this->getLivewire()->validate(
-            $rules,
-            $messages,
-            $attributes,
-        );
+        return Schema::make($this->getLivewire())
+            ->parentComponent($this)
+            ->components($components);
     }
 
     public function validateTarget(): void
     {
-        $this->validateSchemas([
-            $this->getTargetLocaleSchema(),
-            ...array_map(
-                fn (string $row) => $this->getTargetContentSchema($row),
-                $this->getContentRows(),
-            ),
-        ]);
+        $this->getTranslationSchema('target')->validate();
     }
 
     public function validateSource(): void
     {
-        $this->validateSchemas([
-            $this->getSourceLocaleSchema(),
-            ...array_map(
-                fn (string $row) => $this->getSourceContentSchema($row),
-                $this->getContentRows(),
-            ),
-        ]);
+        $this->getTranslationSchema('source')->validate();
     }
 }

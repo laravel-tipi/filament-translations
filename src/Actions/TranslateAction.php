@@ -447,7 +447,7 @@ class TranslateAction extends Action
                 Action::make('saveSourceTranslation')
                     ->label('Save Source')
                     ->action(function (Get $get) use ($container): void {
-                        $container->validateSource();
+                        $attributes = $container->getSourceState();
 
                         $localeCode = $get('source_locale_code');
 
@@ -457,7 +457,7 @@ class TranslateAction extends Action
 
                         $this->updateSourceTranslation(
                             localeCode: $localeCode,
-                            attributes: $get('source_translation'),
+                            attributes: $attributes,
                         );
                     })
                     ->extraAttributes([
@@ -468,7 +468,7 @@ class TranslateAction extends Action
                 Action::make('createTargetTranslation')
                     ->label('Create Translation')
                     ->action(function (Get $get) use ($container): void {
-                        $container->validateTarget();
+                        $attributes = $container->getTargetState();
 
                         $localeCode = $this->getTargetLocaleCode()
                             ?? $get('target_locale_code');
@@ -479,7 +479,7 @@ class TranslateAction extends Action
 
                         $this->createTargetTranslation(
                             localeCode: $localeCode,
-                            attributes: $get('target_translation'),
+                            attributes: $attributes,
                         );
                     })
                     ->extraAttributes([

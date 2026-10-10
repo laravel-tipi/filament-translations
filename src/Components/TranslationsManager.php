@@ -20,6 +20,7 @@ use JsonException;
 use Livewire\Attributes\On;
 use Livewire\Component;
 use LogicException;
+use Tipi\Translations\Contracts\HasTranslationStates;
 use Tipi\Translations\Contracts\LocaleProvider;
 use Tipi\Translations\Contracts\TranslatableModel;
 use Tipi\Translations\Filament\Actions\DeleteTranslationAction;
@@ -87,11 +88,19 @@ class TranslationsManager extends Component implements HasActions, HasSchemas, H
      */
     protected function getTranslationRecords(): Collection
     {
+        $record = $this->getTranslatableRecord();
+
         $currentLocaleCode = $this->getLocaleProvider()
             ->current()
             ->code;
 
-        return $this->getTranslatableRecord()
+        $states = $record instanceof HasTranslationStates
+            ? $record->translationStates()
+                ->get()
+                ->keyBy('locale_code')
+            : collect();
+
+        return $record
             ->getTranslations()
             ->reject(
                 fn (Translation $translation): bool => $translation->localeCode === $currentLocaleCode,
@@ -104,30 +113,40 @@ class TranslationsManager extends Component implements HasActions, HasSchemas, H
                         ->supportedLocale($translation->localeCode)
                         ->name,
                     'attributes' => $translation->attributes,
-                    'is_default' => $this->getLocaleProvider()
-                        ->default()->code === $translation->localeCode,
+                    'state' => $states->get($translation->localeCode),
                 ],
             );
     }
 
     public function table(Table $table): Table
     {
+        $columns = [
+            TextColumn::make('locale_name')
+                ->label('Name'),
+        ];
+
+        if ($this->getTranslatableRecord() instanceof HasTranslationStates) {
+            $columns[] = TextColumn::make('state.status')
+                ->label('Status');
+            $columns[] = TextColumn::make('state.outdated_at')
+                ->label('Freshness')
+                ->placeholder('Up to date')
+                ->formatStateUsing(
+                    fn ($state): string => $state === null
+                        ? 'Up to date'
+                        : 'Outdated',
+                );
+        }
+
         return $table
             ->records(fn (): Collection => $this->getTranslationRecords())
-            ->columns([
-                TextColumn::make('locale_name')
-                    ->label('Name'),
-                TextColumn::make('is_default')
-                    ->label('Status'),
-            ])
+            ->columns($columns)
             ->headerActions([
                 TranslateAction::make()
                     ->translatable(
                         fn (): Model&TranslatableModel => $this->getTranslatableRecord(),
                     )
-                    ->translationSchema(
-                        (array) $this->getTranslationSchema(),
-                    ),
+                    ->translationSchema((array) $this->getTranslationSchema()),
             ])
             ->recordActions([
                 EditTranslationAction::make()
