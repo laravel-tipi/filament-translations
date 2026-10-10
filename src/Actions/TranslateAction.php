@@ -36,8 +36,6 @@ class TranslateAction extends Action
 
     protected string|Closure|null $targetLocaleCode = null;
 
-    protected string|Closure|null $selectedTargetLocaleCode = null;
-
     protected string|Closure|null $sourceLocaleCode = null;
 
     /**
@@ -150,6 +148,12 @@ class TranslateAction extends Action
 
     public function getSourceLocaleCode(): ?string
     {
+        $data = $this->getRawData();
+
+        if (array_key_exists('source_locale_code', $data)) {
+            return $data['source_locale_code'];
+        }
+
         if ($this->sourceLocaleCode !== null) {
             return $this->evaluate($this->sourceLocaleCode);
         }
@@ -179,8 +183,10 @@ class TranslateAction extends Action
 
     public function getSelectedTargetLocaleCode(): ?string
     {
-        if ($this->selectedTargetLocaleCode !== null) {
-            return $this->evaluate($this->selectedTargetLocaleCode);
+        $data = $this->getRawData();
+
+        if (array_key_exists('target_locale_code', $data)) {
+            return $data['target_locale_code'];
         }
 
         return $this->getSingleMissingLocaleCode();
@@ -260,16 +266,35 @@ class TranslateAction extends Action
             ->required()
             ->live()
             ->options(
-                fn (): array => $this->getLocaleOptions($this->getMissingLocales()),
+                function (): array {
+                    $locales = $this->getMissingLocales();
+                    $localeCode = $this->getTargetLocaleCode();
+
+                    if ($localeCode !== null) {
+                        $locales->put($localeCode, $this->getLocaleProvider()->supportedLocale($localeCode));
+                    }
+
+                    return $this->getLocaleOptions($locales);
+                },
             )
             ->disabled(
                 fn (): bool => $this->hasConfiguredTargetLocale()
-                    || $this->hasSingleMissingLocale(),
+                    || ($this->hasSingleMissingLocale()
+                        && $this->getTargetLocaleCode() === $this->getSingleMissingLocaleCode()),
             )
             ->allowHtml()
             ->searchable()
-            ->afterStateUpdated(function (?string $state): void {
-                $this->selectedTargetLocaleCode = $state;
+            ->afterStateUpdated(function (Get $get, Set $set): void {
+                $sourceLocales = $this->getSourceLocales();
+
+                if ($sourceLocales->has($get('source_locale_code'))) {
+                    return;
+                }
+
+                $sourceLocaleCode = $this->getDefaultSourceLocaleCode();
+
+                $set('source_locale_code', $sourceLocaleCode);
+                $set('source_translation', $this->getSourceTranslationState($sourceLocaleCode));
             })
             ->selectablePlaceholder(false);
     }
@@ -470,8 +495,7 @@ class TranslateAction extends Action
                     ->action(function (Get $get) use ($container): void {
                         $attributes = $container->getTargetState();
 
-                        $localeCode = $this->getTargetLocaleCode()
-                            ?? $get('target_locale_code');
+                        $localeCode = $get('target_locale_code');
 
                         if ($localeCode === null) {
                             return;
@@ -573,7 +597,7 @@ class TranslateAction extends Action
 
     protected function hasConfiguredTargetLocale(): bool
     {
-        return $this->targetLocaleCode !== null;
+        return $this->evaluate($this->targetLocaleCode) !== null;
     }
 
     /**
