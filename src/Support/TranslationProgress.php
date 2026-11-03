@@ -8,13 +8,12 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Collection;
 use Tipi\Support\Locale;
 use Tipi\Translations\Concerns\HasTranslationStates;
-use Tipi\Translations\Contracts\TranslatableModel;
-use Tipi\Translations\Models\TranslationState;
+use Tipi\Translations\Filament\Content\RecordContent;
 
 /**
- * The translation progress of one record across locales. Reads only what
- * the model has loaded: eager load translations (and translation states)
- * to compute it for many records without further queries.
+ * The translation progress of a record in each target locale. Derived
+ * from the stored content when read, never stored: it stays right when
+ * the source changes.
  */
 final readonly class TranslationProgress
 {
@@ -26,35 +25,34 @@ final readonly class TranslationProgress
     ) {}
 
     /**
-     * @param  list<string>  $attributes  the attributes that count
      * @param  Collection<string, Locale>  $locales
      */
-    public static function of(Model&TranslatableModel $record, array $attributes, Collection $locales): self
+    public static function of(RecordContent $content, Collection $locales): self
     {
+        $record = $content->record;
         $stored = $record->getAllTranslations();
-        $counted = array_flip($attributes);
+        $attributes = array_flip($content->schema->attributes());
 
         $states = self::supportsStates($record)
             ? $record->getRelationValue('translationStates')->keyBy('locale_code')
             : collect();
 
-        return new self($locales->map(function (Locale $locale) use ($stored, $counted, $states): LocaleProgress {
-            /** @var TranslationState|null $state */
+        return new self($locales->map(function (Locale $locale) use ($content, $stored, $attributes, $states): LocaleProgress {
             $state = $states->get($locale->code);
+            $progress = $content->progress($locale->code);
 
             return new LocaleProgress(
                 locale: $locale,
-                translated: count(array_intersect_key($stored[$locale->code] ?? [], $counted)),
-                total: count($counted),
+                translated: $progress['translated'],
+                total: $progress['total'],
+                hasValues: array_intersect_key($stored[$locale->code] ?? [], $attributes) !== [],
+                review: $progress['review'],
                 outdatedSince: $state?->outdated_at,
                 workflowStatus: $state?->status,
             );
         }));
     }
 
-    /**
-     * Whether the model records translation states (outdated and status).
-     */
     public static function supportsStates(Model $record): bool
     {
         return in_array(HasTranslationStates::class, class_uses_recursive($record), true);
@@ -73,11 +71,8 @@ final readonly class TranslationProgress
         return $this->locales;
     }
 
-    /**
-     * Locales whose every counted attribute is translated.
-     */
     public function completeCount(): int
     {
-        return $this->locales->filter(fn (LocaleProgress $progress): bool => $progress->missing() === 0)->count();
+        return $this->locales->filter(fn (LocaleProgress $progress): bool => ! $progress->needsWork())->count();
     }
 }

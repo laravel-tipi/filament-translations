@@ -27,7 +27,9 @@ return new class extends Migration
             $table->string('locale_code', 16);
             $table->string('name')->nullable();
             $table->text('description')->nullable();
+            $table->text('tasting')->nullable();
             $table->json('notes')->nullable();
+            $table->json('content')->nullable();
             $table->string('internal_code')->nullable();
             $table->timestamps();
             $table->unique(['wine_id', 'locale_code']);

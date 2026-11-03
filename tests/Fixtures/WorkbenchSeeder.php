@@ -28,16 +28,35 @@ final class WorkbenchSeeder extends Seeder
         $wine = Wine::query()->create(['slug' => 'saperavi']);
         $wine->setTranslations('en', [
             'name' => 'Saperavi',
-            'description' => '<p>A deeply coloured <strong>dry red</strong> from Kakheti, aged in qvevri.</p><p>Notes of black cherry and plum.</p>',
-            'notes' => [['note' => 'Black cherry'], ['note' => 'Plum']],
+            'description' => '<h2>A Kakhetian classic</h2>'
+                .'<p>A deeply coloured <strong>dry red</strong> from Kakheti, aged in <a href="https://en.wikipedia.org/wiki/Qvevri" target="_blank">qvevri</a>.</p>'
+                .'<ul><li><p>Black cherry</p></li><li><p>Plum and <em>spice</em></p></li></ul>'
+                .'<p><img src="/images/kakheti.jpg" alt="Vineyards in Kakheti"></p>',
+            'tasting' => '## Nose
+
+Ripe **black cherry**, plum and a hint of [oak](https://example.com/oak).
+
+- Decant for an hour
+- Serve at 16–18 °C',
+            'notes' => [
+                ['id' => 'cherry', 'note' => 'Black cherry', 'score' => 9],
+                ['id' => 'plum', 'note' => 'Plum', 'score' => 8],
+            ],
+            'content' => [
+                ['type' => 'heading', 'data' => ['id' => 'intro', 'text' => 'From the cellar', 'level' => 'h2']],
+                ['type' => 'quote', 'data' => ['id' => 'saying', 'text' => 'Where there is wine, there is life.', 'author' => 'Georgian proverb']],
+                ['type' => 'image', 'data' => ['id' => 'photo', 'url' => '/images/cellar.jpg']],
+            ],
         ])->setTranslations('ka', ['name' => 'საფერავი'])->save();
-        $wine->setTranslations('de', ['name' => 'Saperawi', 'description' => '<p>Trockener Rotwein.</p>'])->save();
+        $wine->setTranslations('de', ['name' => 'Saperawi'])->save();
         $wine->markTranslationOutdated('de');
 
         Wine::query()->create(['slug' => 'rkatsiteli'])->setTranslations('en', ['name' => 'Rkatsiteli', 'description' => '<p>Amber wine.</p>'])->save();
 
         foreach (['Mtsvane', 'Kisi', 'Tavkveri'] as $name) {
-            Grape::query()->create()->setTranslations('en', ['name' => $name, 'description' => "{$name} is a Georgian grape."])->save();
+            Grape::query()->create()->setTranslations('en', ['name' => $name, 'description' => "**{$name}** is a Georgian grape.
+
+It grows in Kakheti."])->save();
         }
 
         Region::query()->create(['owner_id' => $user->id])->setTranslations('en', ['name' => 'Kakheti', 'description' => 'Eastern Georgia.'])->save();

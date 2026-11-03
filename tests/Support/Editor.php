@@ -6,6 +6,7 @@ namespace Tipi\Translations\Filament\Tests\Support;
 
 use Livewire\Features\SupportTesting\Testable;
 use PHPUnit\Framework\Assert;
+use Tipi\Translations\Filament\Content\Segment;
 
 /**
  * Drives a translation editor the same way whether it is a page or a modal.
@@ -35,18 +36,39 @@ final class Editor
         return $this->set('locale', $locale);
     }
 
-    public function source(string $locale): self
+    public function reference(string $locale): self
     {
-        return $this->set('source_locale', $locale);
+        return $this->set('reference', $locale);
     }
 
-    public function fill(string $locale, array $values): self
+    /**
+     * Type translations, by segment id: "name", "description/0~0",
+     * "notes/a/note".
+     *
+     * @param  array<string, string|null>  $texts
+     */
+    public function fill(string $locale, array $texts): self
     {
-        foreach ($values as $attribute => $value) {
-            $this->set("translations.{$locale}.{$attribute}", $value);
+        foreach ($texts as $id => $text) {
+            $this->set(self::path($locale, (string) $id), $text);
         }
 
         return $this;
+    }
+
+    public function text(string $locale, string $id): mixed
+    {
+        return $this->state(self::path($locale, $id));
+    }
+
+    public static function path(string $locale, string $id): string
+    {
+        return "translations.{$locale}.".Segment::keyOf($id);
+    }
+
+    public function conflicts(string $locale): array
+    {
+        return $this->state("conflicts.{$locale}") ?? [];
     }
 
     public function save(): self
@@ -67,9 +89,20 @@ final class Editor
         return $this;
     }
 
-    public function assertErrors(array $keys): self
+    /**
+     * @param  array<string, list<string>>  $segments  locale => segment ids
+     */
+    public function assertErrors(array $segments): self
     {
-        $this->livewire->assertHasErrors(array_map(fn (string $key): string => "{$this->path}.{$key}", $keys));
+        $keys = [];
+
+        foreach ($segments as $locale => $ids) {
+            foreach ($ids as $id) {
+                $keys[] = "{$this->path}.".self::path($locale, $id);
+            }
+        }
+
+        $this->livewire->assertHasErrors($keys);
 
         return $this;
     }

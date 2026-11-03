@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use Filament\Actions\Testing\TestAction;
 use Filament\Facades\Filament;
+use Filament\Forms\Components\Select;
 use Filament\Forms\Components\TextInput;
 use Filament\Schemas\Schema;
 use Illuminate\Support\Facades\App;
@@ -25,7 +26,7 @@ beforeEach(function (): void {
     $this->signIn();
 });
 
-it('defaults to a comparison modal on the context locales', function (): void {
+it('defaults to a comparison modal into the context’s locales, from the global default', function (): void {
     $editor = TranslationEditor::make();
 
     expect($editor->getPresentation())->toBe(EditorPresentation::Modal)
@@ -35,7 +36,11 @@ it('defaults to a comparison modal on the context locales', function (): void {
 
     $wine = makeRecord(Wine::class);
 
-    expect((new RecordEditor(WineResource::getTranslationEditor(), $wine))->locales()->keys()->all())->toBe(['en', 'ka', 'de', 'ar']);
+    $editor = new RecordEditor(WineResource::getTranslationEditor(), $wine);
+
+    // English is the source: translated from, never into.
+    expect($editor->sourceLocale()->code)->toBe('en')
+        ->and($editor->locales()->keys()->all())->toBe(['ka', 'de', 'ar']);
 });
 
 it('applies panel defaults, then resource overrides, then action overrides', function (): void {
@@ -105,7 +110,7 @@ it('runs editors with each panel’s defaults', function (): void {
 
     $editor = new RecordEditor(WineResource::getTranslationEditor(), $wine);
 
-    expect($editor->locales()->keys()->all())->toBe(['en', 'de'])
+    expect($editor->locales()->keys()->all())->toBe(['de'])
         ->and($editor->config->getPresentation())->toBe(EditorPresentation::Page);
 });
 
@@ -119,15 +124,16 @@ it('edits the locales of the content context, not the panel’s', function (): v
 
     $editor = openEditor('page', $wine);
 
-    // Locale-focused: opens the content context's default, English.
-    expect($editor->state('locale'))->toBe('en');
+    // The "web" context's locales, not the panel's: the first that needs work.
+    expect($editor->state('locale'))->toBe('ka')
+        ->and($editor->html())->toContain('tipi-translation-tab-ar');
 
     configureEditor(fn (TranslationEditor $e) => $e->page()->localeTabs()->context('admin'));
 
     $record = new RecordEditor(WineResource::getTranslationEditor(), $wine);
 
-    expect($record->locales()->keys()->all())->toBe(['en', 'ka'])
-        ->and(openEditor('page', $wine)->state('locale'))->toBe('ka');
+    expect($record->locales()->keys()->all())->toBe(['ka'])
+        ->and(openEditor('page', $wine)->html())->not->toContain('tipi-translation-tab-ar');
 });
 
 it('offers inactive locales for drafting when enabled', function (): void {
@@ -150,8 +156,9 @@ it('edits an explicit list of locales', function (): void {
 
     $wine = makeRecord(Wine::class);
 
-    // In registry order, inactive French included because it is listed.
-    expect((new RecordEditor(WineResource::getTranslationEditor(), $wine))->locales()->keys()->all())->toBe(['en', 'ka', 'fr']);
+    // In registry order, inactive French included because it is listed;
+    // English is the source.
+    expect((new RecordEditor(WineResource::getTranslationEditor(), $wine))->locales()->keys()->all())->toBe(['ka', 'fr']);
 });
 
 it('rejects forms with fields that are not translatable attributes', function (): void {
@@ -164,6 +171,41 @@ it('rejects forms with fields that are not translatable attributes', function ()
 
     expect(fn () => (new RecordEditor($editor, $wine))->attributes())
         ->toThrow(LogicException::class, 'The translation form field [slug] is not a translatable attribute');
+});
+
+it('rejects translatable attributes it can’t translate as text', function (): void {
+    $wine = makeRecord(Wine::class);
+
+    $editor = TranslationEditor::make()->form(fn (Schema $schema): Schema => $schema->components([
+        Select::make('name')->options(['a' => 'A']),
+    ]));
+
+    expect(fn () => (new RecordEditor($editor, $wine))->attributes())
+        ->toThrow(LogicException::class, 'The translation form field [name] (Select) can\'t be translated as text');
+});
+
+it('checks the configured placeholders, or none', function (): void {
+    configureEditor(fn (TranslationEditor $e) => $e->page()->placeholders(['/%[a-z]+%/']));
+
+    $wine = makeRecord(Wine::class, ['en' => ['name' => 'Hello %name% :count']]);
+
+    // Only the configured pattern: ":count" may go.
+    openEditor('page', $wine, 'ka')->fill('ka', ['name' => 'გამარჯობა %name%'])->save()->assertSaved();
+    openEditor('page', $wine, 'de')->fill('de', ['name' => 'Hallo :count'])->save()->assertErrors(['de' => ['name']]);
+
+    configureEditor(fn (TranslationEditor $e) => $e->page()->placeholders([]));
+
+    openEditor('page', $wine, 'ar')->fill('ar', ['name' => 'مرحبا'])->save()->assertSaved();
+});
+
+it('identifies items by the configured key', function (): void {
+    configureEditor(fn (TranslationEditor $e) => $e->page()->itemKey('uuid'));
+
+    $wine = makeRecord(Wine::class, ['en' => ['notes' => [['uuid' => 'u1', 'note' => 'Cherry']]]]);
+
+    openEditor('page', $wine, 'ka')->fill('ka', ['notes/u1/note' => 'ალუბალი'])->save()->assertSaved();
+
+    expect($wine->fresh()->getTranslation('notes', 'ka'))->toBe([['uuid' => 'u1', 'note' => 'ალუბალი']]);
 });
 
 it('requires a form', function (): void {
@@ -180,7 +222,7 @@ it('treats only edits as unsaved changes on the page', function (): void {
 
     expect($isClean())->toBeTrue();
 
-    $editor->switchTo('ar')->source('de');
+    $editor->switchTo('ar')->reference('de');
 
     expect($isClean())->toBeTrue();
 

@@ -12,7 +12,7 @@ use Filament\Schemas\Schema;
 use Filament\Support\Enums\Width;
 use Filament\Support\Icons\Heroicon;
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Support\Arr;
+use Illuminate\Database\Eloquent\ModelNotFoundException;
 use LogicException;
 use Tipi\Support\Locale;
 use Tipi\Translations\Contracts\TranslatableModel;
@@ -81,14 +81,11 @@ class TranslateAction extends Action
             // block saving over required fields of locales opened only to look.
             ->modalSubmitAction(fn (Action $action): Action => $action->extraAttributes(['formnovalidate' => true]))
             ->mountUsing(function (TranslateAction $action, ?Schema $schema, array $arguments): void {
-                $editor = $action->requireRecordEditor();
-
-                $schema?->fill($editor->initialState($action->requestedLocale($arguments)));
-                $schema === null || $editor->rememberFormState($schema);
+                $schema?->fill($action->requireRecordEditor()->initialState($action->requestedLocale($arguments)));
             })
             ->schema(fn (TranslateAction $action): array => $action->requireRecordEditor()->components())
-            ->action(function (TranslateAction $action, array $data): void {
-                $action->saveTranslations($data);
+            ->action(function (TranslateAction $action, Schema $schema): void {
+                $action->saveTranslations($schema);
             });
     }
 
@@ -244,14 +241,18 @@ class TranslateAction extends Action
     /**
      * @param  array<string, mixed>  $data
      */
-    protected function saveTranslations(array $data): void
+    protected function saveTranslations(Schema $schema): void
     {
         $editor = $this->requireRecordEditor();
 
         try {
-            $changed = $editor->save($data);
+            $changed = $editor->save($schema);
         } catch (TranslationConflictException $exception) {
             static::sendConflictNotification($editor, $exception);
+
+            $this->halt();
+        } catch (ModelNotFoundException) {
+            static::sendDeletedNotification();
 
             $this->halt();
         }
@@ -265,20 +266,45 @@ class TranslateAction extends Action
     }
 
     /**
-     * @internal
+     * Tell what conflicted: locale and field, and why.
      */
     public static function sendConflictNotification(RecordEditor $editor, TranslationConflictException $exception): void
     {
-        $locales = Arr::join(array_map(
-            fn (string $code): string => $editor->locales()->get($code)->name ?? $code,
-            $exception->locales,
-        ), ', ', ' & ');
+        $lines = [];
+
+        foreach ($exception->conflicts as $conflict) {
+            $segment = $conflict['key'] === null ? null : ($editor->segments($conflict['locale'])[$conflict['key']] ?? null);
+            $field = $editor->schema()->label($conflict['attribute']);
+
+            if ($segment !== null && $segment->context !== []) {
+                $field .= ' › '.implode(' › ', $segment->context);
+            }
+
+            $lines[] = __('tipi-filament-translations::editor.notifications.conflict_'.$conflict['reason'], [
+                'locale' => $editor->locales()->get($conflict['locale'])->name ?? $conflict['locale'],
+                'field' => $field,
+            ]);
+        }
+
+        $lines = array_values(array_unique($lines));
+        $more = count($lines) > 5 ? ' …' : '';
 
         Notification::make()
             ->danger()
             ->persistent()
             ->title(__('tipi-filament-translations::editor.notifications.conflict_title'))
-            ->body(__('tipi-filament-translations::editor.notifications.conflict_body', ['locales' => $locales]))
+            ->body(__('tipi-filament-translations::editor.notifications.conflict_body', [
+                'conflicts' => implode('; ', array_slice($lines, 0, 5)).$more,
+            ]))
+            ->send();
+    }
+
+    public static function sendDeletedNotification(): void
+    {
+        Notification::make()
+            ->danger()
+            ->persistent()
+            ->title(__('tipi-filament-translations::editor.notifications.deleted_record'))
             ->send();
     }
 }

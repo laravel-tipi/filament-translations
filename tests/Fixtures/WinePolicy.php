@@ -8,7 +8,8 @@ use Tipi\Translations\Filament\Tests\Fixtures\Models\User;
 use Tipi\Translations\Filament\Tests\Fixtures\Models\Wine;
 
 /**
- * Translators may be limited to their languages; English can't be deleted.
+ * Translators may be limited to their languages; German translations
+ * can't be deleted.
  */
 final class WinePolicy
 {
@@ -34,6 +35,6 @@ final class WinePolicy
 
     public function deleteTranslation(User $user, Wine $wine, string $locale): bool
     {
-        return $locale !== 'en';
+        return $locale !== 'de';
     }
 }

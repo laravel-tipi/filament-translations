@@ -99,65 +99,177 @@
     background: color-mix(in oklab, var(--warning-400) 10%, transparent);
 }
 
-/* Rows */
+/* Notices */
 
-.fi-tipi-tr-rows,
-.fi-tipi-tr-rows .fi-sc {
-    row-gap: 1.5rem;
+.fi-tipi-tr-notice-muted {
+    color: var(--gray-600);
+    background: var(--gray-50);
 }
 
-.fi-tipi-tr-row {
+:where(.dark) .fi-tipi-tr-notice-muted {
+    color: var(--gray-400);
+    background: color-mix(in oklab, var(--gray-50) 4%, transparent);
+}
+
+.fi-tipi-tr-notice-danger {
+    color: var(--danger-800);
+    background: var(--danger-50);
+}
+
+:where(.dark) .fi-tipi-tr-notice-danger {
+    color: var(--danger-300);
+    background: color-mix(in oklab, var(--danger-400) 10%, transparent);
+}
+
+.fi-tipi-tr-notice summary {
+    cursor: pointer;
+}
+
+.fi-tipi-tr-reference-list {
+    margin: 0.5rem 0 0;
+    padding-inline-start: 1.25rem;
+    list-style: disc;
+    white-space: pre-line;
+}
+
+/* Attributes */
+
+.fi-tipi-tr-attributes,
+.fi-tipi-tr-attributes > .fi-sc {
+    display: grid;
+    row-gap: 2rem;
+}
+
+.fi-tipi-tr-attribute {
     display: grid;
     gap: 0.75rem;
     min-width: 0;
 }
 
-.fi-tipi-tr-cell {
+.fi-tipi-tr-attribute-header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.5rem 0.75rem;
+}
+
+.fi-tipi-tr-attribute-label {
+    margin: 0;
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: var(--gray-950);
+}
+
+:where(.dark) .fi-tipi-tr-attribute-label {
+    color: var(--color-white, #fff);
+}
+
+/* Rows: one per segment */
+
+.fi-tipi-tr-rows,
+.fi-tipi-tr-rows > .fi-sc {
+    display: grid;
+    row-gap: 1rem;
+}
+
+.fi-tipi-tr-row {
     display: grid;
     gap: 0.5rem;
     min-width: 0;
 }
 
-.fi-tipi-tr-cell-source {
-    padding: 0.75rem;
-    border-radius: 0.75rem;
-    background: var(--gray-50);
+.fi-tipi-tr-cell {
+    display: grid;
+    align-content: start;
+    gap: 0.375rem;
+    min-width: 0;
 }
 
-:where(.dark) .fi-tipi-tr-cell-source {
+.fi-tipi-tr-row-label {
+    font-size: 0.75rem;
+    font-weight: 500;
+    color: var(--gray-500);
+}
+
+.fi-tipi-tr-reference {
+    padding: 0.5rem 0.75rem;
+    border-radius: 0.5rem;
+    font-size: 0.875rem;
+    line-height: 1.5rem;
+    color: var(--gray-950);
+    background: var(--gray-50);
+    overflow-wrap: anywhere;
+    max-height: 24rem;
+    overflow-y: auto;
+}
+
+:where(.dark) .fi-tipi-tr-reference {
+    color: var(--gray-200);
     background: color-mix(in oklab, var(--gray-50) 4%, transparent);
 }
 
-/* On narrow editors, cells stack: name each cell's language. */
-.fi-tipi-tr-cell-locale {
-    justify-self: start;
-    font-size: 0.75rem;
-    font-weight: 600;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-    color: var(--gray-500);
+/* Tags: what translators move, never what they translate. */
+.fi-tipi-tr-tag {
+    display: inline-block;
+    margin-inline: 0.0625rem;
+    padding-inline: 0.25rem;
+    border-radius: 0.25rem;
+    font-family: var(--mono-font-family, ui-monospace, monospace);
+    font-size: 0.75em;
+    line-height: 1.25rem;
+    color: var(--primary-700);
+    background: color-mix(in oklab, var(--primary-500) 12%, transparent);
+    cursor: help;
+    unicode-bidi: isolate;
+    direction: ltr;
+}
+
+:where(.dark) .fi-tipi-tr-tag {
+    color: var(--primary-300);
+}
+
+.fi-tipi-tr-input {
+    font-size: 0.875rem;
+    line-height: 1.5rem;
 }
 
 .fi-tipi-tr-row-footer {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    justify-content: space-between;
-    gap: 0.5rem;
+    gap: 0.5rem 0.75rem;
 }
 
-.fi-tipi-tr-row-footer .fi-sc {
-    display: flex;
+.fi-tipi-tr-conflict {
+    display: grid;
+    gap: 0.375rem;
+    padding: 0.5rem 0.75rem;
+    border-radius: 0.5rem;
+    font-size: 0.875rem;
+    color: var(--danger-800);
+    background: var(--danger-50);
 }
 
-/* Long source texts stay readable without stretching the row. */
-.fi-tipi-tr-cell-source textarea,
-.fi-tipi-tr-cell-source .fi-fo-rich-editor-content {
-    max-height: 32rem;
-    overflow-y: auto;
+.fi-tipi-tr-conflict p,
+.fi-tipi-tr-conflict blockquote {
+    margin: 0;
 }
 
-/* Side by side when the editor is wide enough: headings align with cells. */
+.fi-tipi-tr-conflict blockquote {
+    padding-inline-start: 0.75rem;
+    border-inline-start: 2px solid currentColor;
+}
+
+:where(.dark) .fi-tipi-tr-conflict {
+    color: var(--danger-300);
+    background: color-mix(in oklab, var(--danger-400) 10%, transparent);
+}
+
+.fi-tipi-tr-row-conflict .fi-input-wrp {
+    --tw-ring-color: var(--danger-600);
+}
+
+/* The reference beside the translation when the editor is wide enough. */
 @container (min-width: 44rem) {
     .fi-tipi-tr-panel-comparison .fi-tipi-tr-panel-header,
     .fi-tipi-tr-row-comparison {
@@ -165,8 +277,12 @@
         column-gap: 1.5rem;
     }
 
-    .fi-tipi-tr-row-comparison .fi-tipi-tr-cell-locale {
-        display: none;
+    .fi-tipi-tr-row-comparison .fi-tipi-tr-cell-target {
+        padding-block-start: 1.375rem;
+    }
+
+    .fi-tipi-tr-row-comparison:not(:has(.fi-tipi-tr-row-label)) .fi-tipi-tr-cell-target {
+        padding-block-start: 0;
     }
 }
 

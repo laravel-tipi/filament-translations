@@ -5,8 +5,14 @@ declare(strict_types=1);
 namespace Tipi\Translations\Filament\Tests\Fixtures\Resources;
 
 use Filament\Actions\EditAction;
+use Filament\Forms\Components\Builder;
+use Filament\Forms\Components\Builder\Block;
+use Filament\Forms\Components\Hidden;
+use Filament\Forms\Components\MarkdownEditor;
 use Filament\Forms\Components\Repeater;
 use Filament\Forms\Components\RichEditor;
+use Filament\Forms\Components\Select;
+use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\TextInput;
 use Filament\Resources\Resource;
 use Filament\Schemas\Components\Section;
@@ -26,8 +32,9 @@ use Tipi\Translations\Filament\Tests\Fixtures\Resources\Wines\TranslateWine;
 use Tipi\Translations\Filament\TranslationEditor;
 
 /**
- * Table storage with states: a text input, a rich editor and a repeater in
- * a section. "internal_code" is translatable but not in the form.
+ * Table storage with states: plain text, rich text and Markdown, a
+ * repeater with item ids and a builder. "internal_code" is translatable
+ * but not in the form.
  */
 final class WineResource extends Resource
 {
@@ -65,11 +72,31 @@ final class WineResource extends Resource
                 ->maxLength($locale?->code === 'de' ? 20 : 255),
             RichEditor::make('description')->label('Description'),
             Section::make('Tasting')->schema([
+                MarkdownEditor::make('tasting')->label('Tasting notes'),
                 Repeater::make('notes')
                     ->label('Notes')
-                    ->schema([TextInput::make('note')->required()])
+                    ->schema([
+                        Hidden::make('id'),
+                        TextInput::make('note')->required(),
+                        TextInput::make('score')->numeric(),
+                    ])
                     ->defaultItems(0),
             ]),
+            Builder::make('content')
+                ->label('Content')
+                ->blocks([
+                    Block::make('heading')->label('Heading')->schema([
+                        TextInput::make('text'),
+                        Select::make('level')->options(['h2' => 'H2', 'h3' => 'H3']),
+                    ]),
+                    Block::make('quote')->label('Quote')->schema([
+                        Textarea::make('text'),
+                        TextInput::make('author'),
+                    ]),
+                    Block::make('image')->label('Image')->schema([
+                        TextInput::make('url')->url(),
+                    ]),
+                ]),
         ]);
     }
 

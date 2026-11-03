@@ -73,7 +73,7 @@ final class LocaleNavigation extends Field
      */
     private function getTargets(): Collection
     {
-        return $this->editor->targets($this->getRootContainer()->getRawState()[RecordEditor::SOURCE_LOCALE] ?? null);
+        return $this->editor->locales();
     }
 
     /**

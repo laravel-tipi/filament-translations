@@ -6,9 +6,7 @@ namespace Tipi\Translations\Filament\Editor;
 
 use BackedEnum;
 use Filament\Facades\Filament;
-use Filament\Forms\Components\Field;
 use Filament\Forms\Components\Hidden;
-use Filament\Forms\Components\RichEditor;
 use Filament\Forms\Components\Select;
 use Filament\Schemas\Components\Component;
 use Filament\Schemas\Components\Grid;
@@ -17,19 +15,21 @@ use Filament\Schemas\Components\Utilities\Get;
 use Filament\Schemas\Schema;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Support\Arr;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Gate;
-use Illuminate\Support\Str;
-use LogicException;
+use Illuminate\Validation\ValidationException;
 use Tipi\Localization\LocaleContext;
 use Tipi\Localization\LocaleRegistry;
 use Tipi\Support\Locale;
 use Tipi\Translations\Contracts\TranslatableModel;
+use Tipi\Translations\Filament\Content\Alignment;
+use Tipi\Translations\Filament\Content\ContentSchema;
+use Tipi\Translations\Filament\Content\InvalidTranslation;
+use Tipi\Translations\Filament\Content\RecordContent;
+use Tipi\Translations\Filament\Content\Segment;
+use Tipi\Translations\Filament\Content\SegmentText;
 use Tipi\Translations\Filament\Editor\Components\LocaleNavigation;
 use Tipi\Translations\Filament\Editor\Components\LocalePanel;
-use Tipi\Translations\Filament\Editor\Components\TranslationRow;
-use Tipi\Translations\Filament\Enums\FieldStatus;
 use Tipi\Translations\Filament\Exceptions\TranslationConflictException;
 use Tipi\Translations\Filament\Support\ContentContext;
 use Tipi\Translations\Filament\Support\LocaleProgress;
@@ -38,28 +38,39 @@ use Tipi\Translations\Filament\TranslationEditor;
 
 /**
  * The translation editor of one record: the engine behind every
- * presentation (page, modal) and layout (comparison, locale-focused).
+ * presentation (page, modal, slide-over) and layout (comparison,
+ * locale-focused).
+ *
+ * Translators edit text, never structure. The canonical source locale
+ * decides what there is to translate: each text of its content is a
+ * segment, edited in a plain textarea; formatting and links are tags
+ * the translator places. Saving rebuilds each changed attribute from the
+ * source's structure and the translated texts.
  *
  * Editor state, relative to the host schema:
  *
- *     locale         the target locale shown
- *     source_locale  the read-only source (comparison layout)
- *     loaded         locale => fingerprints, when loaded, of the stored values
- *                    ("stored") and of the form state ("form")
- *     translations   locale => attribute => value, for loaded locales only
- *     source         attribute => value of the source locale
+ *     locale        the target locale shown
+ *     reference     the locale shown beside it (comparison layout)
+ *     loaded        locale => what the editor loaded, to tell changes and
+ *                   conflicts: stored value fingerprints by attribute,
+ *                   source structure by attribute, segment => source
+ *                   fingerprint, and the loaded texts ("base")
+ *     translations  locale => segment key => text, for loaded locales
+ *     conflicts     locale => what the last save ran into
  *
  * Contract:
- * - Fields are filled with exactly what is stored for their locale, never
- *   with fallback values.
- * - Locales are loaded when first opened. Saving validates and writes every
- *   loaded locale whose fields changed, in one save() of the model: one
- *   transaction, unchanged values not written, other locales and the source
- *   untouched. Opening a locale only to look at it never blocks saving.
- * - A loaded locale that changed in the database since it was loaded is a
- *   conflict: nothing is saved.
- * - Locale codes and attributes in the state are never trusted: only
- *   offered, authorized locales and the form's attributes are written.
+ * - Segments show exactly what is stored for their locale, never fallback
+ *   text. Blank means not translated; saving it stores no text.
+ * - Saving writes every loaded locale with changed segments, in one locked
+ *   transaction (lockTranslationsForUpdate()). Changes of others to other
+ *   segments are merged; a segment changed by someone else, a segment
+ *   whose source text changed, or an attribute whose source structure
+ *   changed since loading is a conflict: nothing is saved, the
+ *   translator's text is kept and the conflict is shown.
+ * - Drafts are fine: completeness is reported, never required.
+ * - Locale codes, segment keys and texts in the state are never trusted:
+ *   only offered, authorized locales and the source's segments are
+ *   written, checked again on the server.
  *
  * @internal
  */
@@ -67,13 +78,13 @@ final class RecordEditor
 {
     public const string LOCALE = 'locale';
 
-    public const string SOURCE_LOCALE = 'source_locale';
+    public const string REFERENCE = 'reference';
 
     public const string LOADED = 'loaded';
 
     public const string TRANSLATIONS = 'translations';
 
-    public const string SOURCE = 'source';
+    public const string CONFLICTS = 'conflicts';
 
     public readonly LocaleContext $context;
 
@@ -87,17 +98,19 @@ final class RecordEditor
      */
     private ?Collection $locales = null;
 
-    /**
-     * @var list<string>|null
-     */
-    private ?array $attributes = null;
+    private ?ContentSchema $schema = null;
 
     /**
-     * Attributes edited as rich text, whose empty documents are empty values.
-     *
-     * @var array<string, true>
+     * @var array<string, ContentSchema> by locale, for locale-specific limits
      */
-    private array $richTextAttributes = [];
+    private array $localeSchemas = [];
+
+    /**
+     * @var array<string, array<string, Segment>> locale => key => segment
+     */
+    private array $localeSegments = [];
+
+    private ?RecordContent $content = null;
 
     private ?TranslationProgress $progress = null;
 
@@ -115,98 +128,67 @@ final class RecordEditor
     */
 
     /**
-     * The locales the user may edit, in display order.
+     * The canonical source: the language content is authored in. It decides
+     * what there is to translate. The global default locale unless the
+     * editor configures another one.
+     */
+    public function sourceLocale(): Locale
+    {
+        $configured = $this->config->getSourceLocale($this->record);
+
+        return $configured === null ? $this->registry()->default() : $this->registry()->get($configured);
+    }
+
+    /**
+     * The locales the user may translate into, in display order.
      *
      * @return Collection<string, Locale>
      */
     public function locales(): Collection
     {
-        return $this->locales ??= $this->offeredLocales()->filter(
-            fn (Locale $locale): bool => $this->canTranslate($locale->code),
-        );
+        return $this->locales ??= $this->offeredLocales()
+            ->except($this->sourceLocale()->code)
+            ->filter(fn (Locale $locale): bool => $this->canTranslate($locale->code));
     }
 
     /**
-     * The locales shown in the navigation: every editable locale except
-     * the source in the comparison layout.
+     * Locales that can be shown beside a target: the source, and every
+     * other offered or stored locale.
      *
      * @return Collection<string, Locale>
      */
-    public function targets(?string $source): Collection
-    {
-        return $this->config->isComparison() && $source !== null
-            ? $this->locales()->except($source)
-            : $this->locales();
-    }
-
-    /**
-     * Locales that can be the source: every offered or stored locale except
-     * the locales being edited, which can't be read-only at the same time.
-     *
-     * @param  list<string>  $editing
-     * @return Collection<string, Locale>
-     */
-    public function sourceOptions(array $editing): Collection
+    public function referenceOptions(?string $target): Collection
     {
         $stored = $this->record->getTranslatedLocales();
         $offered = $this->offeredLocales();
+        $source = $this->sourceLocale()->code;
 
         return $this->registry()->all()->filter(
-            fn (Locale $locale): bool => ($offered->has($locale->code) || in_array($locale->code, $stored, true))
-                && ! in_array($locale->code, $editing, true),
+            fn (Locale $locale): bool => $locale->code !== $target
+                && ($locale->code === $source || $offered->has($locale->code) || in_array($locale->code, $stored, true)),
         );
     }
 
-    public function defaultSource(?string $except = null): ?string
+    public function defaultReference(?string $target): string
     {
-        if (! $this->config->isComparison()) {
-            return null;
-        }
-
-        $configured = $this->config->getSourceLocale($this->record);
-
-        if ($configured !== null && $configured !== $except) {
-            return $this->registry()->get($configured)->code;
-        }
-
-        $stored = array_values(array_diff($this->record->getTranslatedLocales(), [$except]));
-
-        foreach ([$this->context->defaultCode(), $this->registry()->defaultCode()] as $code) {
-            if (in_array($code, $stored, true)) {
-                return $code;
-            }
-        }
-
-        if ($stored !== []) {
-            return $stored[0];
-        }
-
-        return $this->sourceOptions(array_filter([$except]))->keys()->first();
+        return $this->sourceLocale()->code;
     }
 
-    public function defaultLocale(?string $requested, ?string $source): ?string
+    public function defaultLocale(?string $requested): ?string
     {
-        $targets = $this->targets($source);
+        $targets = $this->locales();
 
         if ($requested !== null && $targets->has($requested)) {
             return $requested;
         }
 
-        if ($this->config->isComparison()) {
-            $needsWork = $targets->first(function (Locale $locale): bool {
-                $progress = $this->progress()->locale($locale->code);
-
-                return $progress !== null && ($progress->missing() > 0 || $progress->isOutdated());
-            });
-
-            if ($needsWork !== null) {
-                return $needsWork->code;
-            }
-        } elseif ($targets->has($this->context->defaultCode())) {
+        if (! $this->config->isComparison() && $targets->has($this->context->defaultCode())) {
             return $this->context->defaultCode();
         }
 
-        return $targets->keys()->first();
+        $needsWork = $targets->first(fn (Locale $locale): bool => $this->localeProgress($locale->code)->needsWork());
+
+        return ($needsWork ?? $targets->first())?->code;
     }
 
     /**
@@ -268,7 +250,7 @@ final class RecordEditor
 
     public function canTranslate(string $locale): bool
     {
-        if (! $this->offeredLocales()->has($locale)) {
+        if (! $this->offeredLocales()->has($locale) || $locale === $this->sourceLocale()->code) {
             return false;
         }
 
@@ -328,62 +310,124 @@ final class RecordEditor
 
     /*
     |--------------------------------------------------------------------------
-    | Form
+    | Content
     |--------------------------------------------------------------------------
     */
 
     /**
-     * The translatable attributes the form edits, in form order.
-     *
+     * The translatable shape of the record, read from the translation form.
+     */
+    public function schema(): ContentSchema
+    {
+        return $this->schema ??= $this->buildSchema($this->locales()->first() ?? $this->sourceLocale());
+    }
+
+    /**
+     * Reuse the schema built for another record of the same form, so tables
+     * don't read the form for every row.
+     */
+    public function useSchema(ContentSchema $schema): self
+    {
+        $this->schema = $schema;
+
+        return $this;
+    }
+
+    /**
      * @return list<string>
      */
     public function attributes(): array
     {
-        if ($this->attributes !== null) {
-            return $this->attributes;
-        }
+        return $this->schema()->attributes();
+    }
 
-        $locale = $this->locales()->first() ?? $this->registry()->default();
-        $attributes = [];
-
-        $this->eachUnit($this->formComponents($locale), function (Component $unit) use (&$attributes): void {
-            $attribute = self::attributeOf($unit);
-
-            if (! $this->record->isTranslatableAttribute($attribute)) {
-                throw new LogicException(sprintf(
-                    'The translation form field [%s] is not a translatable attribute of [%s]. Translatable attributes: [%s].',
-                    $unit->getStatePath(isAbsolute: false),
-                    $this->record::class,
-                    implode(', ', $this->record->getTranslatableAttributes()),
-                ));
-            }
-
-            $attributes[$attribute] = true;
-
-            if ($unit instanceof RichEditor && $unit->getStatePath(isAbsolute: false) === $attribute) {
-                $this->richTextAttributes[$attribute] = true;
-            }
-        });
-
-        if ($attributes === []) {
-            throw new LogicException(sprintf('The translation form of [%s] has no fields.', $this->record::class));
-        }
-
-        return $this->attributes = array_keys($attributes);
+    public function content(): RecordContent
+    {
+        return $this->content ??= new RecordContent($this->record, $this->schema(), $this->sourceLocale()->code);
     }
 
     /**
-     * Reuse attributes computed for another record of the same form, so
-     * tables don't build the form for every row.
+     * The source's segments with the limits of the target locale's form
+     * (a field's maxLength may depend on the locale).
      *
-     * @param  list<string>  $attributes
+     * @return array<string, Segment> key => segment
      */
-    public function useAttributes(array $attributes): self
+    public function segments(string $locale): array
     {
-        $this->attributes = $attributes;
+        if (isset($this->localeSegments[$locale])) {
+            return $this->localeSegments[$locale];
+        }
 
-        return $this;
+        $content = $this->content();
+        $target = $this->registry()->find($locale);
+        $schema = $target === null ? $this->schema() : ($this->localeSchemas[$locale] ??= $this->buildSchema($target));
+        $segments = [];
+
+        foreach ($content->segments() as $attribute => $sourceSegments) {
+            $attributeSegments = $schema === $this->schema() || $sourceSegments === []
+                ? $sourceSegments
+                : $schema->segments($attribute, $content->sourceValue($attribute));
+
+            foreach ($attributeSegments as $segment) {
+                $segments[$segment->key()] = $segment;
+            }
+        }
+
+        return $this->localeSegments[$locale] = $segments;
     }
+
+    /**
+     * @return array<string, list<Segment>> attribute => segments
+     */
+    public function segmentsByAttribute(string $locale): array
+    {
+        $grouped = array_fill_keys($this->attributes(), []);
+
+        foreach ($this->segments($locale) as $segment) {
+            $grouped[$segment->attribute][] = $segment;
+        }
+
+        return $grouped;
+    }
+
+    public function alignment(string $locale, string $attribute): Alignment
+    {
+        return $this->content()->alignment($locale, $attribute);
+    }
+
+    /**
+     * The text of a segment in a reference locale.
+     */
+    public function referenceText(string $locale, Segment $segment): ?string
+    {
+        return $this->alignment($locale, $segment->attribute)->texts[$segment->path] ?? null;
+    }
+
+    /**
+     * @return list<string> regular expressions
+     */
+    public function placeholders(): array
+    {
+        return $this->config->getPlaceholders();
+    }
+
+    private function buildSchema(Locale $locale): ContentSchema
+    {
+        $form = ($this->config->getForm())(Schema::make(), $locale);
+        $components = $form instanceof Schema ? $form->getComponents(withActions: true, withHidden: true) : (array) $form;
+
+        return ContentSchema::fromComponents(
+            $components,
+            fn (string $attribute): bool => $this->record->isTranslatableAttribute($attribute),
+            $this->config->getItemKey(),
+        );
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | Components
+    |--------------------------------------------------------------------------
+    */
 
     /**
      * The editor's components, for the host schema.
@@ -392,22 +436,24 @@ final class RecordEditor
      */
     public function components(): array
     {
-        $this->attributes();
+        $this->schema();
 
         $header = [];
 
         if ($this->config->isComparison()) {
-            $header[] = Select::make(self::SOURCE_LOCALE)
-                ->label(__('tipi-filament-translations::editor.source.label'))
-                ->options(fn (Get $get): array => $this->sourceOptions($this->editing($get))
-                    ->map(fn (Locale $locale): string => $locale->name)
+            $header[] = Select::make(self::REFERENCE)
+                ->label(__('tipi-filament-translations::editor.reference.label'))
+                ->options(fn (Get $get): array => $this->referenceOptions($get(self::LOCALE))
+                    ->map(fn (Locale $locale): string => $locale->code === $this->sourceLocale()->code
+                        ? __('tipi-filament-translations::editor.reference.source', ['locale' => $locale->name])
+                        : $locale->name)
                     ->all())
-                ->searchable(fn (): bool => $this->sourceOptions([])->count() > TranslationEditor::TABS_LIMIT)
+                ->searchable(fn (): bool => $this->referenceOptions(null)->count() > TranslationEditor::TABS_LIMIT)
                 ->selectablePlaceholder(false)
                 ->live()
                 ->dehydrated(false)
                 ->validatedWhenNotDehydrated(false)
-                ->afterStateUpdated(fn (Select $component, ?string $state, ?string $old) => $this->switchSource($component, $state, $old))
+                ->afterStateUpdated(fn (Select $component, ?string $state, ?string $old) => $this->switchReference($component, $state, $old))
                 ->columnSpan(['default' => 'full', '@xl' => 1]);
         }
 
@@ -417,138 +463,16 @@ final class RecordEditor
 
         return [
             Hidden::make(self::LOADED),
+            Hidden::make(self::CONFLICTS),
             // Sized by the editor's width, so modals and pages behave alike.
             Grid::make(['default' => 1, '@xl' => 4])
                 ->gridContainer()
                 ->schema($header)
                 ->key('tipi-translations-header'),
             Text::make(__('tipi-filament-translations::editor.empty'))
-                ->visible(fn (Get $get): bool => $this->targets($get(self::SOURCE_LOCALE))->isEmpty()),
+                ->visible(fn (): bool => $this->locales()->isEmpty()),
             ...$this->locales()->map(fn (Locale $locale): LocalePanel => LocalePanel::make($this, $locale))->values()->all(),
         ];
-    }
-
-    /**
-     * The rows of one locale's panel: the form, with each field wrapped so
-     * that it is bound to the locale and, in the comparison layout, paired
-     * with a read-only copy bound to the source.
-     *
-     * @return array<mixed>
-     */
-    public function rows(Locale $locale, ?string $source, bool $withSource): array
-    {
-        $sourceLocale = ($withSource && $source !== null) ? $this->registry()->find($source) : null;
-
-        return $this->arrange(
-            $this->formComponents($locale),
-            $sourceLocale === null ? null : $this->formComponents($sourceLocale),
-            $locale,
-            $sourceLocale,
-        );
-    }
-
-    /**
-     * @param  array<mixed>  $components
-     * @param  array<mixed>|null  $twins
-     * @return array<mixed>
-     */
-    private function arrange(array $components, ?array $twins, Locale $locale, ?Locale $source): array
-    {
-        if ($twins !== null && count($twins) !== count($components)) {
-            throw new LogicException('The translation form must build the same components for every locale.');
-        }
-
-        $arranged = [];
-
-        foreach (array_values($components) as $index => $component) {
-            $twin = $twins === null ? null : array_values($twins)[$index];
-
-            if (! $component instanceof Component) {
-                $arranged[] = $component;
-
-                continue;
-            }
-
-            if (self::isUnit($component)) {
-                $arranged[] = TranslationRow::make($this, $component, $twin instanceof Component ? $twin : null, $locale, $source);
-
-                continue;
-            }
-
-            $children = self::layoutChildren($component);
-
-            if ($children !== null) {
-                $component->childComponents($this->arrange(
-                    $children,
-                    $twin instanceof Component ? self::layoutChildren($twin) : null,
-                    $locale,
-                    $source,
-                ));
-            }
-
-            $arranged[] = $component;
-        }
-
-        return $arranged;
-    }
-
-    /**
-     * @param  array<mixed>  $components
-     * @param  callable(Component): void  $callback
-     */
-    private function eachUnit(array $components, callable $callback): void
-    {
-        foreach ($components as $component) {
-            if (! $component instanceof Component) {
-                continue;
-            }
-
-            if (self::isUnit($component)) {
-                $callback($component);
-
-                continue;
-            }
-
-            $this->eachUnit(self::layoutChildren($component) ?? [], $callback);
-        }
-    }
-
-    /**
-     * A fresh build of the form for the locale.
-     *
-     * @return array<mixed>
-     */
-    private function formComponents(Locale $locale): array
-    {
-        $form = ($this->config->getForm())(Schema::make(), $locale);
-
-        return $form instanceof Schema ? $form->getComponents(withActions: true, withHidden: true) : (array) $form;
-    }
-
-    /**
-     * Fields, and components with their own state path (which own their
-     * children's state), are edited as a whole.
-     */
-    private static function isUnit(Component $component): bool
-    {
-        return $component instanceof Field || filled($component->getStatePath(isAbsolute: false));
-    }
-
-    /**
-     * The children of a layout component, when they are given as a list.
-     *
-     * @return array<mixed>|null
-     */
-    private static function layoutChildren(Component $component): ?array
-    {
-        $children = $component->getDefaultChildComponents();
-
-        return is_array($children) && $children !== [] ? array_values($children) : null;
-    }
-
-    public static function attributeOf(Component $unit): string
-    {
-        return Str::before((string) $unit->getStatePath(isAbsolute: false), '.');
     }
 
     /*
@@ -562,46 +486,71 @@ final class RecordEditor
      *
      * @return array<string, mixed>
      */
-    public function initialState(?string $locale = null, ?string $source = null): array
+    public function initialState(?string $locale = null, ?string $reference = null): array
     {
-        if ($this->config->isComparison()) {
-            $source = ($source !== null && $this->sourceOptions([])->has($source) && $source !== $locale)
-                ? $source
-                : $this->defaultSource(except: $locale !== null && $this->locales()->has($locale) ? $locale : null);
-        } else {
-            $source = null;
-        }
+        $locale = $this->defaultLocale($locale);
 
-        $locale = $this->defaultLocale($locale, $source);
+        if ($this->config->isComparison()) {
+            $reference = $reference !== null && $this->referenceOptions($locale)->has($reference) ? $reference : $this->defaultReference($locale);
+        } else {
+            $reference = null;
+        }
 
         return [
             self::LOCALE => $locale,
-            self::SOURCE_LOCALE => $source,
-            self::LOADED => $locale === null ? [] : [$locale => ['stored' => $this->fingerprint($locale)]],
-            self::TRANSLATIONS => $locale === null ? [] : [$locale => $this->storedValues($locale)],
-            self::SOURCE => $source === null ? [] : $this->storedValues($source),
+            self::REFERENCE => $reference,
+            self::LOADED => $locale === null ? [] : [$locale => $this->entry($locale)],
+            self::TRANSLATIONS => $locale === null ? [] : [$locale => $this->storedTexts($locale)],
+            self::CONFLICTS => [],
         ];
     }
 
     /**
-     * Exactly what is stored for the locale: attribute => value or null.
+     * The stored texts of every segment of the locale, null when missing.
      *
-     * @return array<string, mixed>
+     * @return array<string, string|null>
      */
-    public function storedValues(string $locale): array
+    public function storedTexts(string $locale): array
     {
-        $values = [];
+        $stored = $this->content()->texts($locale);
+        $texts = [];
 
-        foreach ($this->attributes() as $attribute) {
-            $values[$attribute] = $this->record->getTranslation($attribute, $locale);
+        foreach (array_keys($this->segments($locale)) as $key) {
+            $texts[$key] = $stored[$key] ?? null;
         }
 
-        return $values;
+        return $texts;
     }
 
-    public function fingerprint(string $locale): string
+    /**
+     * What the editor remembers of a locale it loads: the stored values'
+     * fingerprints, the source's structure and segment fingerprints, and
+     * the loaded texts.
+     *
+     * @return array{stored: array<string, string>, structure: array<string, string>, segments: array<string, array{0: string, 1: string}>, base: array<string, string|null>}
+     */
+    public function entry(string $locale): array
     {
-        return md5(serialize($this->storedValues($locale)));
+        $content = $this->content();
+        $stored = [];
+        $structure = [];
+
+        foreach ($this->attributes() as $attribute) {
+            $stored[$attribute] = self::fingerprint($this->record->getTranslation($attribute, $locale));
+            $structure[$attribute] = $content->isUnsupported($attribute) ? 'unsupported' : $this->schema()->skeleton($attribute, $content->sourceValue($attribute));
+        }
+
+        return [
+            'stored' => $stored,
+            'structure' => $structure,
+            'segments' => array_map(fn (Segment $segment): array => [$segment->attribute, $segment->hash()], $this->segments($locale)),
+            'base' => $this->storedTexts($locale),
+        ];
+    }
+
+    private static function fingerprint(mixed $value): string
+    {
+        return md5(serialize($value));
     }
 
     /**
@@ -610,46 +559,12 @@ final class RecordEditor
     public function loadLocale(Schema $root, string $locale): void
     {
         $loaded = $this->loaded($root->getRawState());
-        $loaded[$locale] = ['stored' => $this->fingerprint($locale)];
+        $loaded[$locale] = $this->entry($locale);
 
         $root->fillPartially(
-            [self::TRANSLATIONS => [$locale => $this->storedValues($locale)], self::LOADED => $loaded],
+            [self::TRANSLATIONS => [$locale => $this->storedTexts($locale)], self::LOADED => $loaded],
             [self::TRANSLATIONS.'.'.$locale, self::LOADED],
         );
-
-        $this->rememberFormState($root);
-    }
-
-    /**
-     * Fingerprint the hydrated form state of loaded locales, to tell which
-     * ones the editor changed. Called once their fields are filled.
-     */
-    public function rememberFormState(Schema $root): void
-    {
-        $state = $root->getRawState();
-        $loaded = $this->loaded($state);
-
-        foreach ($loaded as $locale => $fingerprints) {
-            $loaded[$locale]['form'] ??= self::formFingerprint(data_get($state, self::TRANSLATIONS.'.'.$locale));
-        }
-
-        $root->partialRawState([self::LOADED => $loaded]);
-    }
-
-    /**
-     * Whether the editor changed the fields of a loaded locale.
-     */
-    public function isChanged(Schema $root, string $locale): bool
-    {
-        $state = $root->getRawState();
-        $form = $this->loaded($state)[$locale]['form'] ?? null;
-
-        return $form === null || ! hash_equals($form, self::formFingerprint(data_get($state, self::TRANSLATIONS.'.'.$locale)));
-    }
-
-    private static function formFingerprint(mixed $state): string
-    {
-        return md5(json_encode($state, JSON_UNESCAPED_UNICODE | JSON_PRESERVE_ZERO_FRACTION) ?: '');
     }
 
     /**
@@ -659,64 +574,139 @@ final class RecordEditor
     {
         $this->flush();
         $this->loadLocale($root, $locale);
-    }
-
-    public function loadSource(Schema $root, string $source): void
-    {
-        $root->fillPartially([self::SOURCE => $this->storedValues($source)], [self::SOURCE]);
+        $this->clearConflicts($root, $locale);
     }
 
     /**
-     * Copy the stored source value of a field into the target.
+     * The segments the editor changed in a loaded locale: key => text.
+     *
+     * @param  array<string, mixed>|object  $state
+     * @return array<string, string|null>
      */
-    public function copySource(Schema $root, Locale $locale, string $statePath, ?string $source): void
+    public function changes(array|object $state, string $locale): array
     {
-        if ($source === null) {
+        $base = $this->loaded($state)[$locale]['base'] ?? null;
+        $texts = data_get($state, self::TRANSLATIONS.'.'.$locale);
+
+        if (! is_array($base) || ! is_array($texts)) {
+            return [];
+        }
+
+        $changes = [];
+
+        foreach ($texts as $key => $text) {
+            $key = (string) $key;
+
+            if (! array_key_exists($key, $base) || ($text !== null && ! is_string($text))) {
+                continue;
+            }
+
+            if (self::loose($text) !== self::loose($base[$key])) {
+                $changes[$key] = $text;
+            }
+        }
+
+        return $changes;
+    }
+
+    public function isChanged(Schema $root, string $locale): bool
+    {
+        return $this->changes($root->getRawState(), $locale) !== [];
+    }
+
+    private static function loose(mixed $text): ?string
+    {
+        if (! is_string($text)) {
+            return null;
+        }
+
+        $text = trim(str_replace(["\r\n", "\r"], "\n", $text));
+
+        return $text === '' ? null : $text;
+    }
+
+    /**
+     * Put the reference's text of a segment into the target.
+     */
+    public function copyReference(Schema $root, string $locale, string $key): void
+    {
+        $this->authorizeTranslate($locale);
+
+        $segment = $this->segments($locale)[$key] ?? null;
+        $reference = $root->getRawState()[self::REFERENCE] ?? null;
+
+        if ($segment === null) {
             return;
         }
 
-        $this->authorizeTranslate($locale->code);
+        $text = is_string($reference) && $this->referenceOptions($locale)->has($reference)
+            ? $this->referenceText($reference, $segment)
+            : $segment->text;
 
-        $attribute = Str::before($statePath, '.');
-        $value = data_get([$attribute => $this->record->getTranslation($attribute, $source)], $statePath);
+        $this->fill($root, $locale, $key, $text ?? $segment->text);
+    }
 
+    /**
+     * Take the text someone else saved for a conflicting segment.
+     */
+    public function useTheirs(Schema $root, string $locale, string $key): void
+    {
+        $this->authorizeTranslate($locale);
+
+        $conflict = $this->conflicts($root->getRawState(), $locale)['segments'][$key] ?? null;
+
+        if (! is_array($conflict)) {
+            return;
+        }
+
+        $this->fill($root, $locale, $key, is_string($conflict['theirs'] ?? null) ? $conflict['theirs'] : null);
+
+        $conflicts = $this->conflicts($root->getRawState(), $locale);
+        unset($conflicts['segments'][$key]);
+        $this->setConflicts($root, $locale, $conflicts);
+    }
+
+    private function fill(Schema $root, string $locale, string $key, ?string $text): void
+    {
         $root->fillPartially(
-            [self::TRANSLATIONS => [$locale->code => Arr::undot([$statePath => $value])]],
-            [self::TRANSLATIONS.'.'.$locale->code.'.'.$statePath],
+            [self::TRANSLATIONS => [$locale => [$key => $text]]],
+            [self::TRANSLATIONS.'.'.$locale.'.'.$key],
         );
     }
 
     public function switchLocale(Component $navigation, ?string $locale, ?string $previous): void
     {
-        $state = $navigation->getRootContainer()->getRawState();
+        $root = $navigation->getRootContainer();
 
-        if ($locale === null || ! $this->targets($state[self::SOURCE_LOCALE] ?? null)->has($locale)) {
+        if ($locale === null || ! $this->locales()->has($locale)) {
             $navigation->state($previous);
 
             return;
         }
 
-        if (! array_key_exists($locale, $this->loaded($state))) {
-            $this->loadLocale($navigation->getRootContainer(), $locale);
+        if (! array_key_exists($locale, $this->loaded($root->getRawState()))) {
+            $this->loadLocale($root, $locale);
+        }
+
+        $reference = $root->getRawState()[self::REFERENCE] ?? null;
+
+        if ($this->config->isComparison() && (! is_string($reference) || ! $this->referenceOptions($locale)->has($reference))) {
+            $root->fillPartially([self::REFERENCE => $this->defaultReference($locale)], [self::REFERENCE]);
         }
     }
 
-    public function switchSource(Component $select, ?string $source, ?string $previous): void
+    public function switchReference(Component $select, ?string $reference, ?string $previous): void
     {
         $root = $select->getRootContainer();
 
-        if ($source === null || ! $this->sourceOptions(array_keys($this->loaded($root->getRawState())))->has($source)) {
+        if ($reference === null || ! $this->referenceOptions($root->getRawState()[self::LOCALE] ?? null)->has($reference)) {
             $select->state($previous);
-
-            return;
         }
-
-        $this->loadSource($root, $source);
     }
 
     /**
      * @param  array<string, mixed>|object  $state
-     * @return array<string, array{stored: string, form?: string}>
+     * @return array<string, array<string, mixed>>
      */
     public function loaded(array|object $state): array
     {
@@ -728,20 +718,43 @@ final class RecordEditor
 
         return array_filter(
             $loaded,
-            fn (mixed $fingerprints): bool => is_array($fingerprints) && is_string($fingerprints['stored'] ?? null),
+            fn (mixed $entry): bool => is_array($entry) && is_array($entry['base'] ?? null) && is_array($entry['segments'] ?? null)
+                && is_array($entry['stored'] ?? null) && is_array($entry['structure'] ?? null),
         );
     }
 
     /**
-     * The locales being edited: they can't be the source.
+     * What the last save ran into in a locale: segment key => conflict, and
+     * attribute => the texts that no longer fit its source.
      *
-     * @return list<string>
+     * @param  array<string, mixed>|object  $state
+     * @return array{segments: array<string, array{reason: string, theirs: string|null}>, attributes: array<string, list<string>>}
      */
-    private function editing(Get $get): array
+    public function conflicts(array|object $state, string $locale): array
     {
-        $loaded = $get(self::LOADED);
+        $conflicts = data_get($state, self::CONFLICTS.'.'.$locale);
 
-        return is_array($loaded) ? array_map(strval(...), array_keys($loaded)) : [];
+        return [
+            'segments' => is_array($conflicts['segments'] ?? null) ? $conflicts['segments'] : [],
+            'attributes' => is_array($conflicts['attributes'] ?? null) ? $conflicts['attributes'] : [],
+        ];
+    }
+
+    /**
+     * @param  array{segments: array<string, mixed>, attributes: array<string, mixed>}  $conflicts
+     */
+    private function setConflicts(Schema $root, string $locale, array $conflicts): void
+    {
+        $all = data_get($root->getRawState(), self::CONFLICTS);
+        $all = is_array($all) ? $all : [];
+        $all[$locale] = $conflicts;
+
+        $root->partialRawState([self::CONFLICTS => $all]);
+    }
+
+    private function clearConflicts(Schema $root, string $locale): void
+    {
+        $this->setConflicts($root, $locale, ['segments' => [], 'attributes' => []]);
     }
 
     /*
@@ -751,101 +764,252 @@ final class RecordEditor
     */
 
     /**
-     * Save the loaded locales of the editor's dehydrated state.
+     * Save the changed segments of every loaded locale.
      *
-     * @param  array<string, mixed>  $state
-     * @return list<string> the locales that changed
+     * @return list<string> the locales whose stored values changed
      *
      * @throws AuthorizationException
+     * @throws ValidationException
      * @throws TranslationConflictException
      */
-    public function save(array $state): array
+    public function save(Schema $root): array
     {
-        $translations = is_array($state[self::TRANSLATIONS] ?? null) ? $state[self::TRANSLATIONS] : [];
-        $attributes = array_flip($this->attributes());
-        $changes = [];
+        $state = $root->getRawState();
+        $loaded = $this->loaded($state);
+        $pending = [];
+        $errors = [];
 
-        foreach ($this->loaded($state) as $locale => $fingerprints) {
+        foreach ($loaded as $locale => $entry) {
             $locale = (string) $locale;
-            $fingerprint = $fingerprints['stored'];
 
             $this->authorizeTranslate($locale);
 
-            // Unchanged locales, and the source, have no dehydrated values.
-            if (! is_array($translations[$locale] ?? null)) {
-                continue;
+            $segments = $this->segments($locale);
+
+            foreach ($this->changes($state, $locale) as $key => $text) {
+                $segment = $segments[$key] ?? null;
+
+                try {
+                    // A segment the source no longer has is a conflict below.
+                    $pending[$locale][$key] = $segment === null ? self::loose($text) : SegmentText::read($segment, $text, $this->placeholders());
+                } catch (InvalidTranslation $exception) {
+                    $errors[$this->statePath($root, $locale, $key)] = $exception->getMessage();
+                }
             }
-
-            $values = array_intersect_key($translations[$locale], $attributes);
-
-            foreach ($values as $attribute => $value) {
-                $values[$attribute] = $this->normalize($attribute, $value);
-            }
-
-            $changes[$locale] = [$fingerprint, $values];
         }
 
-        if ($changes === []) {
+        if ($errors !== []) {
+            throw ValidationException::withMessages($errors);
+        }
+
+        if ($pending === []) {
             return [];
         }
 
-        $record = $this->record;
+        try {
+            $changed = $this->record->lockTranslationsForUpdate(fn (): array => $this->write($pending, $loaded));
+        } catch (TranslationConflictException $exception) {
+            // The record holds what is stored now: show it with the conflicts.
+            $this->flush();
+            $this->recover($root, $pending, $exception);
 
-        $changed = $record->getConnection()->transaction(function () use ($record, $changes): array {
-            // Lock the row and read what other saves committed meanwhile.
-            $record->newQueryWithoutScopes()->whereKey($record->getKey())->lockForUpdate()->first();
-            $record->refresh();
+            throw $exception;
+        } catch (InvalidTranslation $exception) {
+            $this->flush();
 
-            $conflicts = array_keys(array_filter(
-                $changes,
-                fn (array $change, string $locale): bool => ! hash_equals($this->fingerprint($locale), $change[0]),
-                ARRAY_FILTER_USE_BOTH,
-            ));
-
-            if ($conflicts !== []) {
-                throw new TranslationConflictException($conflicts);
-            }
-
-            foreach ($changes as $locale => [, $values]) {
-                $record->setTranslations($locale, $values);
-            }
-
-            $changed = array_keys($record->getDirtyTranslations());
-
-            $record->save();
-
-            return $changed;
-        });
+            throw ValidationException::withMessages([
+                $this->statePath($root, (string) $exception->locale, (string) $exception->key) => $exception->getMessage(),
+            ]);
+        }
 
         $this->flush();
+
+        foreach (array_keys($pending) as $locale) {
+            $loadedNow = $this->loaded($root->getRawState());
+            $loadedNow[$locale] = $this->entry($locale);
+
+            $root->fillPartially(
+                [self::TRANSLATIONS => [$locale => $this->storedTexts($locale)], self::LOADED => $loadedNow],
+                [self::TRANSLATIONS.'.'.$locale, self::LOADED],
+            );
+
+            $this->clearConflicts($root, $locale);
+        }
 
         return $changed;
     }
 
     /**
-     * Empty form values mean "no translation": they remove the value, so
-     * readers see the fallback instead of an empty text. A rich editor left
-     * empty produces an empty paragraph, which is empty too.
+     * Inside the lock: merge the changes into what is stored now and set
+     * them on the record, which lockTranslationsForUpdate() then saves.
+     *
+     * @param  array<string, array<string, string|null>>  $pending
+     * @param  array<string, array<string, mixed>>  $loaded
+     * @return list<string>
+     *
+     * @throws TranslationConflictException
+     * @throws InvalidTranslation
      */
-    private function normalize(string $attribute, mixed $value): mixed
+    private function write(array $pending, array $loaded): array
     {
-        if ($value === '' || $value === []) {
-            return null;
+        // The record was read again: start from what is stored now.
+        $this->flush();
+
+        $content = $this->content();
+        $conflicts = [];
+        $writes = [];
+
+        foreach ($pending as $locale => $changes) {
+            $entry = $loaded[$locale];
+            $segments = $this->segments($locale);
+            $byAttribute = [];
+
+            foreach ($changes as $key => $text) {
+                $attribute = $entry['segments'][$key][0] ?? null;
+
+                if (is_string($attribute) && in_array($attribute, $this->attributes(), true)) {
+                    $byAttribute[$attribute][$key] = $text;
+                }
+            }
+
+            foreach ($byAttribute as $attribute => $attributeChanges) {
+                $source = $content->sourceValue($attribute);
+                $structure = $content->isUnsupported($attribute) ? 'unsupported' : $this->schema()->skeleton($attribute, $source);
+
+                if ($structure !== ($entry['structure'][$attribute] ?? null)) {
+                    $conflicts[] = ['locale' => $locale, 'attribute' => $attribute, 'key' => null, 'reason' => TranslationConflictException::STRUCTURE, 'theirs' => null];
+
+                    continue;
+                }
+
+                $remote = $content->texts($locale, $attribute);
+                $changedRemotely = self::fingerprint($this->record->getTranslation($attribute, $locale)) !== ($entry['stored'][$attribute] ?? null);
+                $attributeKeys = array_filter($segments, fn (Segment $segment): bool => $segment->attribute === $attribute);
+                $texts = $changedRemotely ? $remote : array_intersect_key($entry['base'], $attributeKeys);
+
+                foreach ($attributeChanges as $key => $text) {
+                    $segment = $segments[$key] ?? null;
+
+                    if ($segment === null || $segment->hash() !== ($entry['segments'][$key][1] ?? null)) {
+                        $conflicts[] = ['locale' => $locale, 'attribute' => $attribute, 'key' => $key, 'reason' => TranslationConflictException::SOURCE, 'theirs' => $remote[$key] ?? null];
+
+                        continue;
+                    }
+
+                    $theirs = $remote[$key] ?? null;
+                    $base = $entry['base'][$key] ?? null;
+
+                    if ($changedRemotely && self::loose($theirs) !== self::loose($base) && self::loose($theirs) !== $text) {
+                        $conflicts[] = ['locale' => $locale, 'attribute' => $attribute, 'key' => $key, 'reason' => TranslationConflictException::CHANGED, 'theirs' => $theirs];
+
+                        continue;
+                    }
+
+                    $texts[$key] = $text;
+                }
+
+                $writes[$locale][$attribute] = $texts;
+            }
         }
 
-        if (isset($this->richTextAttributes[$attribute]) && is_string($value) && self::isBlankHtml($value)) {
-            return null;
+        if ($conflicts !== []) {
+            throw new TranslationConflictException($conflicts);
         }
 
-        return $value;
+        $changed = [];
+
+        foreach ($writes as $locale => $attributes) {
+            $segments = $this->segments($locale);
+
+            foreach ($attributes as $attribute => $texts) {
+                $byPath = [];
+
+                foreach ($texts as $key => $text) {
+                    if (isset($segments[$key]) && is_string($text) && trim($text) !== '') {
+                        $byPath[$segments[$key]->path] = $text;
+                    }
+                }
+
+                try {
+                    $value = $byPath === [] ? null : $this->schema()->node($attribute)->rebuild('', $content->sourceValue($attribute), $byPath);
+                } catch (InvalidTranslation $exception) {
+                    $exception->locale = $locale;
+                    $exception->key = Segment::keyOf($exception->path === null || $exception->path === '' ? $attribute : $attribute.'/'.$exception->path);
+
+                    throw $exception;
+                }
+
+                if (self::fingerprint($value) !== self::fingerprint($this->record->getTranslation($attribute, $locale))) {
+                    $this->record->setTranslation($attribute, $locale, $value);
+                    $changed[$locale] = true;
+                }
+            }
+        }
+
+        return array_map('strval', array_keys($changed));
     }
 
-    private static function isBlankHtml(string $html): bool
+    /**
+     * After a conflict: load what is stored now, keep the translator's texts
+     * on top, and show what conflicted.
+     *
+     * @param  array<string, array<string, string|null>>  $pending
+     */
+    private function recover(Schema $root, array $pending, TranslationConflictException $exception): void
     {
-        $text = strip_tags($html, '<img><video><audio><iframe><embed><object><hr>');
-        $text = html_entity_decode($text, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+        $loaded = $this->loaded($root->getRawState());
 
-        return trim(str_replace("\u{00A0}", ' ', $text)) === '';
+        foreach ($pending as $locale => $changes) {
+            $previous = $loaded[$locale];
+            $loaded[$locale] = $this->entry($locale);
+            $texts = $this->storedTexts($locale);
+            $conflicts = ['segments' => [], 'attributes' => []];
+
+            $structural = [];
+
+            foreach ($exception->conflicts as $conflict) {
+                if ($conflict['locale'] !== $locale) {
+                    continue;
+                }
+
+                if ($conflict['reason'] === TranslationConflictException::STRUCTURE) {
+                    $structural[$conflict['attribute']] = true;
+                } elseif ($conflict['key'] !== null) {
+                    $conflicts['segments'][$conflict['key']] = ['reason' => $conflict['reason'], 'theirs' => $conflict['theirs']];
+                }
+            }
+
+            foreach ($changes as $key => $text) {
+                $attribute = $previous['segments'][$key][0] ?? null;
+
+                if (isset($structural[$attribute]) || ! array_key_exists($key, $texts)) {
+                    // The text no longer fits the source: keep it to copy from.
+                    if ($text !== null && is_string($attribute)) {
+                        $conflicts['attributes'][$attribute][] = $text;
+                    }
+
+                    continue;
+                }
+
+                $texts[$key] = $text;
+            }
+
+            $root->fillPartially(
+                [self::TRANSLATIONS => [$locale => $texts]],
+                [self::TRANSLATIONS.'.'.$locale],
+            );
+
+            $this->setConflicts($root, $locale, $conflicts);
+        }
+
+        $root->partialRawState([self::LOADED => $loaded]);
+    }
+
+    private function statePath(Schema $root, string $locale, string $key): string
+    {
+        $prefix = $root->getStatePath();
+
+        return (filled($prefix) ? $prefix.'.' : '').self::TRANSLATIONS.'.'.$locale.'.'.$key;
     }
 
     /**
@@ -897,16 +1061,6 @@ final class RecordEditor
     /**
      * @throws AuthorizationException
      */
-    public function markOthersOutdated(string $locale): void
-    {
-        $this->authorizeTranslate($locale);
-        $this->record->markOtherTranslationsOutdated($locale);
-        $this->flush();
-    }
-
-    /**
-     * @throws AuthorizationException
-     */
     public function setWorkflowStatus(string $locale, ?BackedEnum $status): void
     {
         $this->authorizeTranslate($locale);
@@ -922,25 +1076,23 @@ final class RecordEditor
 
     public function progress(): TranslationProgress
     {
-        return $this->progress ??= TranslationProgress::of($this->record, $this->attributes(), $this->offeredLocales());
+        return $this->progress ??= TranslationProgress::of($this->content(), $this->offeredLocales()->except($this->sourceLocale()->code));
     }
 
     public function localeProgress(string $locale): LocaleProgress
     {
         return $this->progress()->locale($locale)
-            ?? TranslationProgress::of($this->record, $this->attributes(), $this->registry()->all()->only([$locale]))->locale($locale);
+            ?? TranslationProgress::of($this->content(), $this->registry()->all()->only([$locale]))->locale($locale);
     }
 
     /**
-     * The stored state of an attribute in a locale, and the locale readers
-     * of the content context see instead when it falls back.
-     *
-     * @return array{FieldStatus, Locale|null}
+     * The locale readers of the content context see instead of a missing
+     * attribute, or null when they see nothing.
      */
-    public function fieldStatus(string $attribute, string $locale): array
+    public function fallbackLocale(string $attribute, string $locale): ?Locale
     {
-        if ($this->record->hasTranslation($attribute, $locale)) {
-            return [FieldStatus::Translated, null];
+        if ($this->record->getTranslation($attribute, $locale) !== null) {
+            return null;
         }
 
         $resolved = app(ContentContext::class)->run(
@@ -948,14 +1100,14 @@ final class RecordEditor
             fn () => $this->record->resolveTranslation($attribute, $locale),
         );
 
-        return $resolved->isFallback()
-            ? [FieldStatus::Fallback, $this->registry()->find((string) $resolved->locale)]
-            : [FieldStatus::Missing, null];
+        return $resolved->isFallback() ? $this->registry()->find((string) $resolved->locale) : null;
     }
 
     public function flush(): void
     {
         $this->progress = null;
+        $this->localeSegments = [];
+        $this->content?->flush();
     }
 
     /*

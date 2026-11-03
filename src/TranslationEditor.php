@@ -9,6 +9,7 @@ use Filament\Facades\Filament;
 use Filament\Resources\Resource;
 use Illuminate\Database\Eloquent\Model;
 use LogicException;
+use Tipi\Translations\Filament\Content\SegmentText;
 use Tipi\Translations\Filament\Enums\EditorLayout;
 use Tipi\Translations\Filament\Enums\EditorPresentation;
 use Tipi\Translations\Filament\Enums\LocaleNavigation;
@@ -59,6 +60,13 @@ final class TranslationEditor
     private bool $hasInactiveLocales = false;
 
     private string|Closure|null $sourceLocale = null;
+
+    /**
+     * @var list<string>|null
+     */
+    private ?array $placeholders = null;
+
+    private ?string $itemKey = 'id';
 
     /**
      * A new editor with the current panel's defaults applied.
@@ -214,15 +222,42 @@ final class TranslationEditor
     }
 
     /**
-     * The source locale the comparison layout opens with. Defaults to the
-     * context's default locale, then the global default, when they have
-     * content. Editors can choose another source.
+     * The canonical source locale: the language content is authored in.
+     * Its content decides what there is to translate, and the structure
+     * translations keep. The global default locale by default; a closure
+     * can choose per record. Translators can show another language beside
+     * the target, but that never changes what is translated.
      *
      * @param  string|Closure(Model): ?string|null  $locale
      */
     public function sourceLocale(string|Closure|null $locale): self
     {
         $this->sourceLocale = $locale;
+
+        return $this;
+    }
+
+    /**
+     * Placeholders translations must keep, as regular expressions. By
+     * default {{ name }}, {name}, :name and %s. An empty list checks none.
+     *
+     * @param  list<string>|null  $patterns
+     */
+    public function placeholders(?array $patterns): self
+    {
+        $this->placeholders = $patterns === null ? null : array_values($patterns);
+
+        return $this;
+    }
+
+    /**
+     * The key of the id field of repeater and builder items ("id" by
+     * default). Items with an id keep their translations when the source
+     * adds, removes or reorders items; others are matched by position.
+     */
+    public function itemKey(?string $key): self
+    {
+        $this->itemKey = $key;
 
         return $this;
     }
@@ -283,6 +318,19 @@ final class TranslationEditor
     public function hasInactiveLocales(): bool
     {
         return $this->hasInactiveLocales;
+    }
+
+    /**
+     * @return list<string>
+     */
+    public function getPlaceholders(): array
+    {
+        return $this->placeholders ?? SegmentText::PLACEHOLDERS;
+    }
+
+    public function getItemKey(): ?string
+    {
+        return $this->itemKey;
     }
 
     public function getSourceLocale(Model $record): ?string

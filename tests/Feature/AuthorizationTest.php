@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use Filament\Actions\Testing\TestAction;
 use Livewire\Livewire;
+use Tipi\Translations\Filament\Content\Segment;
 use Tipi\Translations\Filament\Tests\Fixtures\Models\Region;
 use Tipi\Translations\Filament\Tests\Fixtures\Models\Wine;
 use Tipi\Translations\Filament\Tests\Fixtures\Resources\Regions\ListRegions;
@@ -24,34 +25,34 @@ it('offers translators only their locales', function (): void {
 
     $wine = makeRecord(Wine::class, ['en' => ['name' => 'Saperavi']]);
 
-    $editor = openEditor('page', $wine, 'en');
+    $editor = openEditor('page', $wine, 'ar');
 
-    // English isn't theirs: the editor opens at a locale they may edit.
+    // Arabic isn't theirs: the editor opens at a locale they may edit.
     expect($editor->state('locale'))->toBe('ka')
         ->and($editor->html())->toContain('tipi-translation-tab-ka')
-        ->and($editor->html())->not->toContain('tipi-translation-tab-en');
+        ->and($editor->html())->toContain('tipi-translation-tab-de')
+        ->and($editor->html())->not->toContain('tipi-translation-tab-ar');
 
-    $editor->switchTo('en');
+    $editor->switchTo('ar');
 
     expect($editor->state('locale'))->toBe('ka')
-        ->and($editor->state('loaded'))->not->toHaveKey('en');
+        ->and($editor->state('loaded'))->not->toHaveKey('ar');
 });
 
-it('rejects a forged locale on save', function (string $presentation): void {
+it('rejects a forged locale on save, the source included', function (string $presentation, string $forged): void {
     $this->signIn(['translator_locales' => ['ka']]);
     configureEditor(fn (TranslationEditor $e) => $presentation === 'page' ? $e->page() : $e->modal());
 
     $wine = makeRecord(Wine::class, ['en' => ['name' => 'Saperavi']]);
 
-    $editor = openEditor($presentation, $wine, 'ka')
-        ->fill('ka', ['name' => 'საფერავი'])
-        ->set('loaded.en', ['stored' => 'forged'])
-        ->set('translations.en.name', 'Hacked');
+    $editor = openEditor($presentation, $wine, 'ka')->fill('ka', ['name' => 'საფერავი']);
+    $editor->set("loaded.{$forged}", $editor->state('loaded.ka'))
+        ->set("translations.{$forged}", [Segment::keyOf('name') => 'Hacked']);
 
     $editor->save()->livewire->assertForbidden();
 
     expect($wine->fresh()->getAllTranslations())->toBe(['en' => ['name' => 'Saperavi']]);
-})->with(['page', 'modal']);
+})->with(['page', 'modal'])->with(['de', 'en']);
 
 it('hides the action and forbids the page without any translatable locale', function (): void {
     $this->signIn(['translator_locales' => []]);
@@ -93,9 +94,11 @@ it('hides deleting a translation the policy protects', function (): void {
 
     $wine = makeRecord(Wine::class, ['en' => ['name' => 'Saperavi'], 'ka' => ['name' => 'საფერავი']]);
 
-    $editor = openEditor('page', $wine, 'en');
+    $wine->setTranslation('name', 'de', 'Saperawi')->save();
 
-    $editor->livewire->assertActionHidden(TestAction::make('deleteTranslation')->schemaComponent('tipi-translation-panel-en', schema: 'form'));
+    $editor = openEditor('page', $wine->fresh(), 'de');
+
+    $editor->livewire->assertActionHidden(TestAction::make('deleteTranslation')->schemaComponent('tipi-translation-panel-de', schema: 'form'));
 
     $editor->switchTo('ka');
 

@@ -5,9 +5,8 @@
     $locale = $getLocale();
     $progress = $getProgress();
     $isActive = $isActive();
-    $isComparison = $isComparison();
-    $source = $isComparison ? $getSourceLocale() : null;
-    $sourceProgress = $source === null ? null : $getSourceProgress();
+    $reference = $isComparison() ? $getReferenceLocale() : null;
+    $source = $getSourceLocale();
     $navigation = Js::from($getNavigationStatePath());
     $code = Js::from($locale->code);
 @endphp
@@ -18,7 +17,7 @@
             ->merge($getExtraAttributes(), escape: false)
             ->class([
                 'fi-tipi-tr-panel',
-                'fi-tipi-tr-panel-comparison' => $source !== null,
+                'fi-tipi-tr-panel-comparison' => $reference !== null,
             ])
     }}
     aria-label="{{ $locale->name }}"
@@ -31,21 +30,17 @@
     x-on:expand="if ($wire.get({{ $navigation }}) !== {{ $code }}) $wire.set({{ $navigation }}, {{ $code }})"
 >
     <header class="fi-tipi-tr-panel-header">
-        @if ($source !== null)
-            <div class="fi-tipi-tr-heading fi-tipi-tr-heading-source">
-                <span class="fi-tipi-tr-heading-role">{{ __('tipi-filament-translations::editor.panel.source') }}</span>
-                <span class="fi-tipi-tr-heading-locale" lang="{{ $source->code }}">{{ $source->name }}</span>
-
-                @if ($sourceProgress !== null)
-                    <x-filament::badge size="sm" :color="$sourceProgress->status()->getColor()" :tooltip="$sourceProgress->summary()">
-                        {{ $sourceProgress->fraction() }}
-                    </x-filament::badge>
-                @endif
+        @if ($reference !== null)
+            <div class="fi-tipi-tr-heading fi-tipi-tr-heading-reference">
+                <span class="fi-tipi-tr-heading-role">
+                    {{ $reference->code === $source->code ? __('tipi-filament-translations::editor.panel.source') : __('tipi-filament-translations::editor.panel.reference') }}
+                </span>
+                <span class="fi-tipi-tr-heading-locale" lang="{{ $reference->code }}">{{ $reference->name }}</span>
             </div>
         @endif
 
         <div class="fi-tipi-tr-heading fi-tipi-tr-heading-target">
-            @if ($source !== null)
+            @if ($reference !== null)
                 <span class="fi-tipi-tr-heading-role">{{ __('tipi-filament-translations::editor.panel.target') }}</span>
             @endif
 
@@ -56,7 +51,7 @@
             @endif
 
             <x-filament::badge size="sm" :color="$progress->status()->getColor()" :icon="$progress->status()->getIcon()" :tooltip="$progress->summary()">
-                {{ __('tipi-filament-translations::editor.panel.progress', ['translated' => $progress->translated, 'total' => $progress->total]) }}
+                {{ $progress->total === 0 ? $progress->status()->getLabel() : __('tipi-filament-translations::editor.panel.progress', ['translated' => $progress->translated, 'total' => $progress->total]) }}
             </x-filament::badge>
 
             @if ($progress->isOutdated())
@@ -89,7 +84,13 @@
         </p>
     @endif
 
-    <div class="fi-tipi-tr-rows">
+    @unless ($hasSegments())
+        <p class="fi-tipi-tr-notice fi-tipi-tr-notice-muted" role="status">
+            {{ __('tipi-filament-translations::editor.panel.nothing', ['locale' => $source->name]) }}
+        </p>
+    @endunless
+
+    <div class="fi-tipi-tr-attributes">
         {{ $getChildSchema('rows') }}
     </div>
 </section>

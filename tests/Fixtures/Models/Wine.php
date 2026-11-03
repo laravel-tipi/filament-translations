@@ -13,7 +13,7 @@ use Tipi\Translations\Contracts\TranslatableModel;
 /**
  * Table storage, with translation states.
  */
-#[Translatable(['name', 'description', 'notes', 'internal_code'])]
+#[Translatable(['name', 'description', 'tasting', 'notes', 'content', 'internal_code'])]
 class Wine extends Model implements TranslatableModel
 {
     use HasTableTranslations;

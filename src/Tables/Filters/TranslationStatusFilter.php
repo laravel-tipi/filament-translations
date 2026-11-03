@@ -9,6 +9,7 @@ use Filament\Tables\Filters\Filter;
 use Filament\Tables\Filters\Indicator;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Collection;
 use LogicException;
 use Tipi\Support\Locale;
 use Tipi\Translations\Contracts\TranslatableModel;
@@ -48,14 +49,14 @@ class TranslationStatusFilter extends Filter
             ->schema(fn (): array => [
                 Select::make('locale')
                     ->label(__('tipi-filament-translations::editor.filter.locale'))
-                    ->options(fn (): array => $this->getEditor()->offeredLocales()->map(fn (Locale $locale): string => $locale->name)->all()),
+                    ->options(fn (): array => $this->getLocales()->map(fn (Locale $locale): string => $locale->name)->all()),
                 Select::make('status')
                     ->label(__('tipi-filament-translations::editor.filter.status'))
                     ->options(fn (): array => $this->getStatusOptions()),
             ])
             ->query(fn (Builder $query, array $data): Builder => $this->applyStatus($query, $data['locale'] ?? null, $data['status'] ?? null))
             ->indicateUsing(function (array $data): array {
-                $locale = $this->getEditor()->offeredLocales()->get($data['locale'] ?? '');
+                $locale = $this->getLocales()->get($data['locale'] ?? '');
                 $status = $this->getStatusOptions()[$data['status'] ?? ''] ?? null;
 
                 if ($locale === null || $status === null) {
@@ -92,28 +93,41 @@ class TranslationStatusFilter extends Filter
      */
     public function applyStatus(Builder $query, mixed $locale, mixed $status): Builder
     {
-        if (! is_string($locale) || ! is_string($status) || ! $this->getEditor()->offeredLocales()->has($locale)) {
+        if (! is_string($locale) || ! is_string($status) || ! $this->getLocales()->has($locale)) {
             return $query;
         }
 
         $attributes = $this->getEditor()->attributes();
+        $source = $this->getEditor()->sourceLocale()->code;
 
+        // Per attribute, in SQL: whether the source has a value, and the
+        // locale too. A partly translated document counts as translated.
         return match ($status) {
-            self::COMPLETE => $query->where(function (Builder $query) use ($attributes, $locale): void {
+            self::COMPLETE => $query->where(function (Builder $query) use ($attributes, $locale, $source): void {
                 foreach ($attributes as $attribute) {
-                    $query->whereHasTranslation($attribute, $locale);
+                    $query->where(fn (Builder $query) => $query
+                        ->whereDoesntHaveTranslation($attribute, $source)
+                        ->orWhere(fn (Builder $query) => $query->whereHasTranslation($attribute, $locale)));
                 }
             }),
-            self::MISSING => $query->where(function (Builder $query) use ($attributes, $locale): void {
+            self::INCOMPLETE => $query->where(function (Builder $query) use ($attributes, $locale, $source): void {
                 foreach ($attributes as $attribute) {
-                    $query->whereDoesntHaveTranslation($attribute, $locale);
+                    $query->orWhere(fn (Builder $query) => $query
+                        ->whereHasTranslation($attribute, $source)
+                        ->whereDoesntHaveTranslation($attribute, $locale));
                 }
             }),
-            self::INCOMPLETE => $query->where(function (Builder $query) use ($attributes, $locale): void {
-                foreach ($attributes as $attribute) {
-                    $query->orWhere(fn (Builder $query) => $query->whereDoesntHaveTranslation($attribute, $locale));
-                }
-            }),
+            self::MISSING => $query
+                ->where(function (Builder $query) use ($attributes, $locale): void {
+                    foreach ($attributes as $attribute) {
+                        $query->whereDoesntHaveTranslation($attribute, $locale);
+                    }
+                })
+                ->where(function (Builder $query) use ($attributes, $source): void {
+                    foreach ($attributes as $attribute) {
+                        $query->orWhere(fn (Builder $query) => $query->whereHasTranslation($attribute, $source));
+                    }
+                }),
             self::OUTDATED => $this->getEditor()->supportsStates()
                 ? $query->whereHas('translationStates', fn (Builder $query) => $query
                     ->where('locale_code', $locale)
@@ -121,6 +135,16 @@ class TranslationStatusFilter extends Filter
                 : $query,
             default => $query,
         };
+    }
+
+    /**
+     * The target locales: offered, except the source.
+     *
+     * @return Collection<string, Locale>
+     */
+    protected function getLocales(): Collection
+    {
+        return $this->getEditor()->offeredLocales()->except($this->getEditor()->sourceLocale()->code);
     }
 
     /**

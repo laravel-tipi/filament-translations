@@ -10,16 +10,20 @@ use Tipi\Support\Locale;
 use Tipi\Translations\Filament\Enums\TranslationStatus;
 
 /**
- * How far one locale of a record is translated, counting the attributes
- * the translation form edits, and its editorial state when the model uses
- * translation states.
+ * The translation progress of one locale of a record: how many of the
+ * source's segments it translates.
  */
 final readonly class LocaleProgress
 {
+    /**
+     * @param  list<string>  $review  attributes with stored translations that no longer line up with the source
+     */
     public function __construct(
         public Locale $locale,
         public int $translated,
         public int $total,
+        public bool $hasValues = false,
+        public array $review = [],
         public ?CarbonInterface $outdatedSince = null,
         public BackedEnum|string|null $workflowStatus = null,
     ) {}
@@ -27,9 +31,10 @@ final readonly class LocaleProgress
     public function status(): TranslationStatus
     {
         return match (true) {
+            $this->total === 0 => TranslationStatus::NotApplicable,
             $this->translated === 0 => TranslationStatus::Missing,
             $this->translated >= $this->total => TranslationStatus::Complete,
-            default => TranslationStatus::Partial,
+            default => TranslationStatus::Incomplete,
         };
     }
 
@@ -38,45 +43,50 @@ final readonly class LocaleProgress
         return $this->outdatedSince !== null;
     }
 
+    public function needsWork(): bool
+    {
+        return $this->missing() > 0 || $this->isOutdated() || $this->review !== [];
+    }
+
     public function missing(): int
     {
         return max(0, $this->total - $this->translated);
     }
 
+    /**
+     * Whether anything is stored for the locale (delete, outdated actions).
+     */
     public function hasContent(): bool
     {
-        return $this->translated > 0;
+        return $this->hasValues;
     }
 
-    /**
-     * The color for badges: outdated wins over completeness.
-     */
     public function color(): string
     {
-        return $this->isOutdated() ? 'warning' : $this->status()->getColor();
+        return $this->isOutdated() || $this->review !== [] ? 'warning' : $this->status()->getColor();
     }
 
-    /**
-     * "4/6", the compact form used in badges.
-     */
     public function fraction(): string
     {
-        return "{$this->translated}/{$this->total}";
+        return $this->total === 0 ? '–' : "{$this->translated}/{$this->total}";
     }
 
-    /**
-     * A sentence for tooltips and screen readers.
-     */
     public function summary(): string
     {
-        $summary = __('tipi-filament-translations::editor.progress.summary', [
-            'locale' => $this->locale->name,
-            'translated' => $this->translated,
-            'total' => $this->total,
-        ]);
+        $summary = $this->total === 0
+            ? __('tipi-filament-translations::editor.progress.not_applicable', ['locale' => $this->locale->name])
+            : __('tipi-filament-translations::editor.progress.summary', [
+                'locale' => $this->locale->name,
+                'translated' => $this->translated,
+                'total' => $this->total,
+            ]);
 
         if ($this->isOutdated()) {
             $summary .= ' '.__('tipi-filament-translations::editor.progress.outdated');
+        }
+
+        if ($this->review !== []) {
+            $summary .= ' '.__('tipi-filament-translations::editor.progress.review');
         }
 
         if ($this->locale->isInactive()) {

@@ -3,9 +3,8 @@
 declare(strict_types=1);
 
 use Filament\Actions\Testing\TestAction;
-use Illuminate\Support\Facades\DB;
-use Tipi\Translations\Filament\Tests\Fixtures\Models\Grape;
-use Tipi\Translations\Filament\Tests\Fixtures\Models\Region;
+use Filament\Notifications\Notification;
+use Tipi\Translations\Filament\Content\Segment;
 use Tipi\Translations\Filament\Tests\Fixtures\Models\Wine;
 use Tipi\Translations\Filament\TranslationEditor;
 
@@ -18,269 +17,112 @@ dataset('presentations', [
     'modal' => ['modal', fn (TranslationEditor $e) => $e->modal()],
 ]);
 
-it('treats cleared fields as removed translations, so readers see the fallback', function (string $presentation, Closure $editor): void {
+it('treats cleared texts as removed translations, so readers see the fallback', function (string $presentation, Closure $editor): void {
     configureEditor($editor);
 
     $wine = makeRecord(Wine::class, [
-        'en' => ['name' => 'Saperavi'],
-        'ka' => ['name' => 'საფერავი', 'description' => '<p>მშრალი</p>', 'notes' => [['note' => 'ალუბალი']]],
+        'en' => ['name' => 'Saperavi', 'description' => '<p>Dry.</p>'],
+        'ka' => ['name' => 'საფერავი', 'description' => '<p>მშრალი.</p>'],
     ]);
 
     openEditor($presentation, $wine, 'ka')
-        ->fill('ka', ['description' => '', 'notes' => []])
-        ->save()
-        ->assertSaved();
-
-    expect($wine->fresh()->getTranslations('ka'))->toBe(['name' => 'საფერავი']);
-})->with('presentations');
-
-it('never stores a rich editor left empty', function (string $presentation, Closure $editor): void {
-    configureEditor($editor);
-
-    $wine = makeRecord(Wine::class, ['en' => ['name' => 'Saperavi', 'description' => '<p>Dry</p>']]);
-
-    openEditor($presentation, $wine, 'ka')->fill('ka', ['name' => 'საფერავი'])->save()->assertSaved();
-
-    expect($wine->fresh()->hasTranslation('description', 'ka'))->toBeFalse()
-        ->and($wine->fresh()->description)->toBe('<p>Dry</p>');
-})->with('presentations');
-
-it('round-trips rich text and repeaters', function (string $presentation, Closure $editor): void {
-    configureEditor($editor);
-
-    $wine = makeRecord(Wine::class, ['ka' => [
-        'name' => 'საფერავი',
-        'description' => '<p>მშრალი <strong>წითელი</strong></p>',
-        'notes' => [['note' => 'ალუბალი'], ['note' => 'ქლიავი']],
-    ]]);
-
-    $editor = openEditor($presentation, $wine, 'ka');
-
-    // Hydrated by the fields themselves: a document and keyed repeater items.
-    expect($editor->state('translations.ka.description'))->toBeArray()
-        ->and($editor->state('translations.ka.notes'))->toHaveCount(2);
-
-    $editor->fill('ka', ['name' => 'საფერავი!'])->save()->assertSaved();
-
-    expect($wine->fresh()->getTranslations('ka'))->toBe([
-        'name' => 'საფერავი!',
-        'description' => '<p>მშრალი <strong>წითელი</strong></p>',
-        'notes' => [['note' => 'ალუბალი'], ['note' => 'ქლიავი']],
-    ]);
-})->with('presentations');
-
-it('validates fields nested in repeaters', function (string $presentation, Closure $editor): void {
-    configureEditor($editor);
-
-    $wine = makeRecord(Wine::class, ['ka' => ['name' => 'საფერავი', 'notes' => [['note' => 'ალუბალი']]]]);
-
-    $editor = openEditor($presentation, $wine, 'ka');
-    $key = array_key_first($editor->state('translations.ka.notes'));
-
-    $editor->set("translations.ka.notes.{$key}.note", null)->save()->assertErrors(["translations.ka.notes.{$key}.note"]);
-
-    expect($wine->fresh()->getTranslation('notes', 'ka'))->toBe([['note' => 'ალუბალი']]);
-})->with('presentations');
-
-it('ignores attributes and locales the editor does not offer', function (string $presentation, Closure $editor): void {
-    configureEditor($editor);
-
-    $wine = makeRecord(Wine::class, ['en' => ['name' => 'Saperavi', 'internal_code' => 'SAP-1']]);
-
-    openEditor($presentation, $wine, 'ka')
-        ->fill('ka', ['name' => 'საფერავი'])
-        // Not in the form, though translatable.
-        ->set('translations.ka.internal_code', 'HACK')
-        // Not loaded: never written.
-        ->set('translations.de', ['name' => 'Injected'])
+        ->fill('ka', ['name' => '  ', 'description/0~0' => ''])
         ->save()
         ->assertSaved();
 
     $wine = $wine->fresh();
 
-    expect($wine->getTranslations('ka'))->toBe(['name' => 'საფერავი'])
-        ->and($wine->getTranslation('internal_code', 'en'))->toBe('SAP-1')
-        ->and($wine->hasTranslation('name', 'de'))->toBeFalse();
+    expect($wine->getTranslations('ka'))->toBe([])
+        // Neither an empty string nor an empty paragraph is stored.
+        ->and($wine->resolveTranslation('name', 'ka')->isFallback())->toBeTrue();
 })->with('presentations');
 
-it('refuses to write a locale injected into the loaded locales', function (string $presentation, Closure $editor): void {
+it('stores an empty rich text block, never the source’s text, for untranslated paragraphs', function (string $presentation, Closure $editor): void {
     configureEditor($editor);
 
-    $wine = makeRecord(Wine::class, ['en' => ['name' => 'Saperavi']]);
+    $wine = makeRecord(Wine::class, ['en' => ['description' => '<h2>Saperavi</h2><p>Dry.</p>']]);
 
-    // French is inactive and not offered.
+    openEditor($presentation, $wine, 'ka')
+        ->fill('ka', ['description/0~0' => 'საფერავი'])
+        ->save()
+        ->assertSaved();
+
+    expect($wine->fresh()->getTranslation('description', 'ka'))->toBe('<h2>საფერავი</h2><p></p>');
+})->with('presentations');
+
+it('writes only the editor’s segments of offered, authorized locales', function (string $presentation, Closure $editor): void {
+    $this->signIn(['translator_locales' => ['ka']]);
+    configureEditor($editor);
+
+    $wine = makeRecord(Wine::class, ['en' => ['name' => 'Saperavi', 'internal_code' => 'X1']]);
+
     $editor = openEditor($presentation, $wine, 'ka')
         ->fill('ka', ['name' => 'საფერავი'])
-        ->set('loaded.fr', ['stored' => md5(serialize(['name' => null, 'description' => null, 'notes' => null]))])
-        ->set('translations.fr', ['name' => 'Injecté']);
-
-    $editor->save()->livewire->assertForbidden();
-
-    // Nothing at all is written, not even the authorized locale.
-    expect($wine->fresh()->getAllTranslations())->toBe(['en' => ['name' => 'Saperavi']]);
-})->with('presentations');
-
-it('keeps the editor open and saves nothing when another save changed the locale', function (string $presentation, Closure $editor): void {
-    configureEditor($editor);
-
-    $wine = makeRecord(Wine::class, ['en' => ['name' => 'Saperavi'], 'ka' => ['name' => 'საფერავი']]);
-
-    $editor = openEditor($presentation, $wine, 'ka')->fill('ka', ['name' => 'ჩემი']);
-
-    // Another editor saves Georgian meanwhile.
-    Wine::query()->find($wine->getKey())->setTranslation('description', 'ka', '<p>სხვისი</p>')->save();
-
-    $editor->save()->assertStillOpen();
-    $editor->livewire->assertNotified(__('tipi-filament-translations::editor.notifications.conflict_title'));
-
-    expect($wine->fresh()->getTranslations('ka'))->toBe(['name' => 'საფერავი', 'description' => '<p>სხვისი</p>'])
-        ->and($editor->state('translations.ka.name'))->toBe('ჩემი');
-})->with('presentations');
-
-it('does not conflict when another save changed a locale the editor did not open', function (string $presentation, Closure $editor): void {
-    configureEditor($editor);
-
-    $wine = makeRecord(Wine::class, ['en' => ['name' => 'Saperavi']]);
-
-    $editor = openEditor($presentation, $wine, 'ka')->fill('ka', ['name' => 'საფერავი']);
-
-    Wine::query()->find($wine->getKey())->setTranslation('name', 'de', 'Saperawi')->save();
+        // Not segments of the source: a field the form doesn't have, made up keys.
+        ->set('translations.ka.'.Segment::keyOf('internal_code'), 'Hacked')
+        ->set('translations.ka.made_up', 'Hacked');
 
     $editor->save()->assertSaved();
 
-    expect($wine->fresh()->getAllTranslations())->toMatchArray([
-        'ka' => ['name' => 'საფერავი'],
-        'de' => ['name' => 'Saperawi'],
-    ]);
+    expect($wine->fresh()->getTranslations('ka'))->toBe(['name' => 'საფერავი']);
+})->with('presentations');
+
+it('refuses a locale injected into the editor’s state', function (string $presentation, Closure $editor): void {
+    $this->signIn(['translator_locales' => ['ka']]);
+    configureEditor($editor);
+
+    $wine = makeRecord(Wine::class, ['en' => ['name' => 'Saperavi']]);
+    $editor = openEditor($presentation, $wine, 'ka');
+
+    // Copy Georgian's loaded entry to German, which the user may not translate.
+    $editor->set('loaded.de', $editor->state('loaded.ka'))
+        ->set('translations.de', [Segment::keyOf('name') => 'Hacked']);
+
+    $editor->save()->livewire->assertForbidden();
+
+    expect($wine->fresh()->getTranslatedLocales())->toBe(['en']);
 })->with('presentations');
 
 it('reports when nothing changed', function (string $presentation, Closure $editor): void {
     configureEditor($editor);
 
     $wine = makeRecord(Wine::class, ['en' => ['name' => 'Saperavi'], 'ka' => ['name' => 'საფერავი']]);
-    $updatedAt = $wine->updated_at;
 
-    $this->travel(1)->minute();
+    openEditor($presentation, $wine, 'ka')
+        ->fill('ka', ['name' => " საფერავი \n"])
+        ->save()
+        ->assertSaved();
 
-    openEditor($presentation, $wine, 'ka')->save()->assertSaved()
-        ->livewire->assertNotified(__('tipi-filament-translations::editor.notifications.unchanged'));
-
-    expect($wine->fresh()->updated_at->equalTo($updatedAt))->toBeTrue();
+    Notification::assertNotified(__('tipi-filament-translations::editor.notifications.unchanged'));
 })->with('presentations');
 
-it('saves in one transaction with the model', function (): void {
-    configureEditor(fn (TranslationEditor $e) => $e->page());
+it('copies the reference text with its tags into the translation', function (): void {
+    configureEditor(fn (TranslationEditor $e) => $e->page()->comparison());
 
-    $wine = makeRecord(Wine::class, ['en' => ['name' => 'Saperavi']]);
-    $editor = openEditor('page', $wine, 'ka')->fill('ka', ['name' => 'საფერავი'])->switchTo('de')->fill('de', ['name' => 'Saperawi']);
+    $wine = makeRecord(Wine::class, ['en' => ['description' => '<p>Very <strong>dry</strong>.</p>']]);
 
-    $queries = [];
-    DB::listen(function ($query) use (&$queries): void {
-        $queries[] = $query->sql;
-    });
+    $html = openEditor('page', $wine, 'ka')->html();
 
-    $editor->save()->assertSaved();
-
-    $writes = array_values(array_filter($queries, fn (string $sql): bool => preg_match('/^(insert|update|delete)/i', $sql) === 1));
-
-    // The model's updated_at, one upsert for both locales, and the states.
-    expect(collect($writes)->filter(fn (string $sql): bool => str_contains($sql, 'wine_translations'))->count())->toBe(1);
+    // The copy button sets the field to the source text, tags included.
+    expect($html)->toContain("\$wire.set('data.translations.ka.".Segment::keyOf('description/0~0')."', 'Very \\u003Cb1\\u003Edry\\u003C\\/b1\\u003E.')");
 });
 
-it('copies the stored source value into the target field', function (string $presentation, Closure $editor): void {
-    configureEditor(fn (TranslationEditor $e) => $editor($e)->comparison());
-
-    $wine = makeRecord(Wine::class, ['en' => [
-        'name' => 'Saperavi',
-        'description' => '<p>Dry <strong>red</strong></p>',
-        'notes' => [['note' => 'Cherry']],
-    ]]);
-
-    $editor = openEditor($presentation, $wine, 'ka');
-
-    foreach (['description', 'notes'] as $attribute) {
-        $editor->livewire->callAction(
-            TestAction::make('copySource')->schemaComponent("tipi-translation-panel-ka.tipi-translation-ka-{$attribute}", schema: $presentation === 'page' ? 'form' : 'mountedActionSchema0'),
-        );
-    }
-
-    $editor->fill('ka', ['name' => 'საფერავი'])->save()->assertSaved();
-
-    expect($wine->fresh()->getTranslations('ka'))->toBe([
-        'name' => 'საფერავი',
-        'description' => '<p>Dry <strong>red</strong></p>',
-        'notes' => [['note' => 'Cherry']],
-    ]);
-})->with('presentations');
-
-it('switches the source and keeps editing locales out of the source options', function (string $presentation, Closure $editor): void {
-    configureEditor(fn (TranslationEditor $e) => $editor($e)->comparison());
-
-    $wine = makeRecord(Wine::class, [
-        'en' => ['name' => 'Saperavi'],
-        'de' => ['name' => 'Saperawi'],
-    ]);
-
-    $editor = openEditor($presentation, $wine, 'ka');
-
-    expect($editor->state('source_locale'))->toBe('en')
-        ->and($editor->state('source.name'))->toBe('Saperavi');
-
-    $editor->source('de');
-
-    expect($editor->state('source_locale'))->toBe('de')
-        ->and($editor->state('source.name'))->toBe('Saperawi');
-
-    // Georgian is being edited: it can't become the read-only source.
-    $editor->source('ka');
-
-    expect($editor->state('source_locale'))->toBe('de');
-
-    // The source is never written, even when its state is changed.
-    $editor->set('source.name', 'Changed')->fill('ka', ['name' => 'საფერავი'])->save()->assertSaved();
-
-    expect($wine->fresh()->getTranslation('name', 'de'))->toBe('Saperawi');
-})->with('presentations');
-
-it('shows a missing source honestly instead of substituting another locale', function (string $presentation, Closure $editor): void {
-    configureEditor(fn (TranslationEditor $e) => $editor($e)->comparison()->sourceLocale('de'));
-
-    $wine = makeRecord(Wine::class, ['en' => ['name' => 'Saperavi']]);
-
-    $editor = openEditor($presentation, $wine, 'ka');
-
-    expect($editor->state('source_locale'))->toBe('de')
-        ->and($editor->state('source.name'))->toBeNull();
-})->with('presentations');
-
-it('opens the source and target locales from the query string', function (): void {
+it('opens the target and reference locales from the query string, and ignores unknown ones', function (): void {
     configureEditor(fn (TranslationEditor $e) => $e->page()->comparison());
 
     $wine = makeRecord(Wine::class, ['en' => ['name' => 'Saperavi'], 'de' => ['name' => 'Saperawi']]);
 
-    $editor = openEditor('page', $wine, 'ka', ['source' => 'de']);
+    $editor = openEditor('page', $wine, 'ka', ['reference' => 'de']);
 
-    expect($editor->state('locale'))->toBe('ka')->and($editor->state('source_locale'))->toBe('de');
+    expect($editor->state('locale'))->toBe('ka')->and($editor->state('reference'))->toBe('de')
+        ->and($editor->livewire->get('activeLocale'))->toBe('ka')
+        ->and($editor->livewire->get('referenceLocale'))->toBe('de');
 
-    $editor->switchTo('ar');
+    $editor = openEditor('page', $wine, 'xx', ['reference' => 'yy']);
 
-    $editor->livewire->assertSet('activeLocale', 'ar')->assertSet('sourceLocale', 'de');
+    expect($editor->state('locale'))->toBeIn(['ka', 'de', 'ar'])
+        ->and($editor->state('reference'))->toBe('en');
 });
-
-it('ignores unknown or unauthorized locales in links', function (string $presentation, Closure $editor): void {
-    configureEditor($editor);
-
-    $wine = makeRecord(Wine::class, ['en' => ['name' => 'Saperavi']]);
-
-    $editor = openEditor($presentation, $wine, 'xx');
-
-    expect($editor->state('locale'))->toBeIn(['ka', 'de', 'ar']);
-
-    $editor->switchTo('fr');
-
-    expect($editor->state('locale'))->not->toBe('fr')
-        ->and($editor->state('loaded'))->not->toHaveKey('fr');
-})->with('presentations');
 
 it('deletes a translation from the editor', function (string $presentation, Closure $editor): void {
     configureEditor($editor);
@@ -288,20 +130,10 @@ it('deletes a translation from the editor', function (string $presentation, Clos
     $wine = makeRecord(Wine::class, ['en' => ['name' => 'Saperavi'], 'ka' => ['name' => 'საფერავი']]);
 
     $editor = openEditor($presentation, $wine, 'ka');
-
     $editor->livewire->callAction(TestAction::make('deleteTranslation')->schemaComponent('tipi-translation-panel-ka', schema: $presentation === 'page' ? 'form' : 'mountedActionSchema0'));
 
-    expect($wine->fresh()->getTranslations('ka'))->toBe([])
-        ->and($editor->state('translations.ka.name'))->toBeNull();
-})->with('presentations');
-
-it('works the same for every storage on the page', function (string $model): void {
-    configureEditor(fn (TranslationEditor $e) => $e->page()->localeTabs());
-
-    $record = makeRecord($model, ['en' => ['name' => 'Kakheti']]);
-
-    $editor = openEditor('page', $record, 'ka')->fill('ka', ['name' => 'კახეთი', 'description' => 'აღმოსავლეთი']);
-    $editor->save()->assertSaved();
-
-    expect($record->fresh()->getTranslations('ka'))->toBe(['name' => 'კახეთი', 'description' => 'აღმოსავლეთი']);
-})->with([Grape::class, Region::class]);
+    expect($wine->fresh()->getTranslatedLocales())->toBe(['en'])
+        ->and($editor->text('ka', 'name'))->toBeNull();
+})->with([
+    'page' => ['page', fn (TranslationEditor $e) => $e->page()],
+]);

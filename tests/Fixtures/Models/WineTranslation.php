@@ -12,6 +12,6 @@ class WineTranslation extends Model
 
     protected function casts(): array
     {
-        return ['notes' => 'array'];
+        return ['notes' => 'array', 'content' => 'array'];
     }
 }

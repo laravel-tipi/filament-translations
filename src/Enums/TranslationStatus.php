@@ -10,20 +10,18 @@ use Filament\Support\Contracts\HasLabel;
 use Filament\Support\Icons\Heroicon;
 
 /**
- * The completeness of one locale of a record, counting only the attributes
- * the translation form edits. Whether the locale is outdated is reported
- * separately: an outdated translation can be complete.
+ * How much of a locale is translated, measured against the source.
  */
 enum TranslationStatus: string implements HasColor, HasIcon, HasLabel
 {
-    /** Every attribute has a stored value. */
     case Complete = 'complete';
 
-    /** Some attributes have a stored value. */
-    case Partial = 'partial';
+    case Incomplete = 'incomplete';
 
-    /** No attribute has a stored value. */
     case Missing = 'missing';
+
+    /** The source has no text to translate. */
+    case NotApplicable = 'not_applicable';
 
     public function getLabel(): string
     {
@@ -34,8 +32,8 @@ enum TranslationStatus: string implements HasColor, HasIcon, HasLabel
     {
         return match ($this) {
             self::Complete => 'success',
-            self::Partial => 'warning',
-            self::Missing => 'gray',
+            self::Incomplete => 'warning',
+            self::Missing, self::NotApplicable => 'gray',
         };
     }
 
@@ -43,8 +41,9 @@ enum TranslationStatus: string implements HasColor, HasIcon, HasLabel
     {
         return match ($this) {
             self::Complete => Heroicon::CheckCircle,
-            self::Partial => Heroicon::EllipsisHorizontalCircle,
+            self::Incomplete => Heroicon::EllipsisHorizontalCircle,
             self::Missing => Heroicon::MinusCircle,
+            self::NotApplicable => Heroicon::NoSymbol,
         };
     }
 }

@@ -4,8 +4,8 @@ declare(strict_types=1);
 
 namespace Tipi\Translations\Filament\Tests\Fixtures\Resources;
 
-use Filament\Forms\Components\TagsInput;
-use Filament\Forms\Components\Textarea;
+use Filament\Forms\Components\MarkdownEditor;
+use Filament\Forms\Components\Repeater;
 use Filament\Forms\Components\TextInput;
 use Filament\Resources\Resource;
 use Filament\Schemas\Schema;
@@ -42,8 +42,9 @@ final class GrapeResource extends Resource
     {
         return $schema->components([
             TextInput::make('name')->required(),
-            Textarea::make('description'),
-            TagsInput::make('notes'),
+            MarkdownEditor::make('description'),
+            // Items without ids: matched by position.
+            Repeater::make('notes')->schema([TextInput::make('label')])->defaultItems(0),
         ]);
     }
 

@@ -17,8 +17,8 @@ use Filament\Schemas\Schema;
 use Filament\Support\Facades\FilamentView;
 use Filament\Support\Icons\Heroicon;
 use Illuminate\Contracts\Support\Htmlable;
+use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Support\Js;
-use Livewire\Attributes\Locked;
 use Livewire\Attributes\Url;
 use LogicException;
 use Tipi\Translations\Contracts\TranslatableModel;
@@ -38,7 +38,7 @@ use Tipi\Translations\Filament\Resources\Concerns\Translatable;
  *
  *     'translations' => TranslateWine::route('/{record}/translations'),
  *
- * The edited and source locales are in the query string (?locale=ka&source=en),
+ * The edited and reference locales are in the query string (?locale=ka&reference=de),
  * so links, reloads and browser history open the same editor.
  */
 abstract class TranslateRecord extends Page
@@ -54,17 +54,8 @@ abstract class TranslateRecord extends Page
     #[Url(as: 'locale', history: true)]
     public ?string $activeLocale = null;
 
-    #[Url(as: 'source', history: true)]
-    public ?string $sourceLocale = null;
-
-    /**
-     * The raw state of each loaded locale when it was loaded, to tell
-     * unsaved changes from locales that were only opened.
-     *
-     * @var array<string, mixed>
-     */
-    #[Locked]
-    public array $loadedState = [];
+    #[Url(as: 'reference', history: true)]
+    public ?string $referenceLocale = null;
 
     public ?string $previousUrl = null;
 
@@ -113,8 +104,7 @@ abstract class TranslateRecord extends Page
 
     protected function fillForm(): void
     {
-        $this->form->fill($this->getRecordEditor()->initialState($this->activeLocale, $this->sourceLocale));
-        $this->getRecordEditor()->rememberFormState($this->form);
+        $this->form->fill($this->getRecordEditor()->initialState($this->activeLocale, $this->referenceLocale));
 
         $this->syncEditorState();
     }
@@ -156,25 +146,26 @@ abstract class TranslateRecord extends Page
     {
         $editor = $this->getRecordEditor();
 
+        // Validates the changed locales.
+        $this->form->getState();
+
         try {
-            $changed = $editor->save($this->form->getState());
+            $changed = $editor->save($this->form);
         } catch (TranslationConflictException $exception) {
             TranslateAction::sendConflictNotification($editor, $exception);
 
             return;
+        } catch (ModelNotFoundException) {
+            TranslateAction::sendDeletedNotification();
+
+            return;
         }
 
-        $this->activeLocale = $this->data[RecordEditor::LOCALE] ?? $this->activeLocale;
-        $this->sourceLocale = $this->data[RecordEditor::SOURCE_LOCALE] ?? $this->sourceLocale;
-        $this->loadedState = [];
-        $this->fillForm();
+        $this->syncEditorState();
 
         $this->getSavedNotification($changed)?->send();
     }
 
-    /**
-     * @param  list<string>  $changed
-     */
     protected function getSavedNotification(array $changed): ?Notification
     {
         return Notification::make()
@@ -187,23 +178,16 @@ abstract class TranslateRecord extends Page
     private function syncEditorState(): void
     {
         $data = $this->data ?? [];
-        $loaded = $this->getRecordEditor()->loaded($data);
 
         $this->activeLocale = $data[RecordEditor::LOCALE] ?? null;
-        $this->sourceLocale = $data[RecordEditor::SOURCE_LOCALE] ?? null;
-
-        foreach (array_keys($loaded) as $locale) {
-            $this->loadedState[$locale] ??= $data[RecordEditor::TRANSLATIONS][$locale] ?? null;
-        }
-
-        $this->loadedState = array_intersect_key($this->loadedState, $loaded);
+        $this->referenceLocale = $data[RecordEditor::REFERENCE] ?? null;
 
         $this->rememberData();
     }
 
     /**
-     * The data as loaded: unsaved changes are differences in the loaded
-     * locales, not locales opened or sources switched since.
+     * The data as loaded counts as saved: switching locales or the
+     * reference isn't an unsaved change, editing a text is.
      */
     protected function rememberData(): void
     {
@@ -213,8 +197,8 @@ abstract class TranslateRecord extends Page
 
         $data = $this->data ?? [];
 
-        foreach ($this->loadedState as $locale => $state) {
-            $data[RecordEditor::TRANSLATIONS][$locale] = $state;
+        foreach ($this->getRecordEditor()->loaded($data) as $locale => $entry) {
+            $data[RecordEditor::TRANSLATIONS][$locale] = $entry['base'];
         }
 
         $this->savedDataHash = md5((string) str(json_encode($data, JSON_UNESCAPED_UNICODE))->replace('\\', ''));

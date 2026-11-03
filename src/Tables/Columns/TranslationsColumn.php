@@ -11,6 +11,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\Relation;
 use Tipi\Translations\Contracts\TranslatableModel;
 use Tipi\Translations\Filament\Actions\TranslateAction;
+use Tipi\Translations\Filament\Content\ContentSchema;
 use Tipi\Translations\Filament\Editor\RecordEditor;
 use Tipi\Translations\Filament\Resources\Concerns\Translatable;
 use Tipi\Translations\Filament\Support\LocaleProgress;
@@ -38,7 +39,7 @@ class TranslationsColumn extends Column
     /**
      * @var list<string>|null
      */
-    protected ?array $countedAttributes = null;
+    protected ?ContentSchema $contentSchema = null;
 
     public static function make(?string $name = 'translations'): static
     {
@@ -148,9 +149,10 @@ class TranslationsColumn extends Column
     {
         $editor = new RecordEditor($this->getEditorConfig(), $record);
 
-        $this->countedAttributes ??= $editor->attributes();
+        // The form is read once for the table, not for every row.
+        $this->contentSchema ??= $editor->schema();
 
-        return $editor->useAttributes($this->countedAttributes);
+        return $editor->useSchema($this->contentSchema);
     }
 
     protected function getEditorConfig(): TranslationEditor

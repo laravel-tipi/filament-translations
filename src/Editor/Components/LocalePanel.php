@@ -10,6 +10,7 @@ use Filament\Actions\ActionGroup;
 use Filament\Forms\Components\Select;
 use Filament\Notifications\Notification;
 use Filament\Schemas\Components\Component;
+use Filament\Schemas\Components\Group;
 use Filament\Schemas\Components\Utilities\Get;
 use Filament\Support\Icons\Heroicon;
 use Tipi\Support\Locale;
@@ -18,9 +19,9 @@ use Tipi\Translations\Filament\Support\LocaleProgress;
 use Tipi\Translations\Models\TranslationState;
 
 /**
- * The fields of one locale, with its progress and locale actions. Shown
- * once the locale is loaded; only the active locale is visible, the others
- * keep their unsaved changes until the editor is saved.
+ * The editor of one target locale: its header and actions, and a group
+ * per attribute. Bound to translations.{locale}, dehydrated (validated,
+ * saved) only when its texts changed.
  *
  * @internal
  */
@@ -32,10 +33,7 @@ final class LocalePanel extends Component
 
     private Locale $locale;
 
-    /**
-     * @var array<string, array<mixed>>
-     */
-    private array $rows = [];
+    private ?Group $content = null;
 
     public static function make(RecordEditor $editor, Locale $locale): self
     {
@@ -46,27 +44,26 @@ final class LocalePanel extends Component
 
         $panel
             ->key('tipi-translation-panel-'.$locale->code)
-            ->visible(fn (Get $get): bool => array_key_exists($locale->code, (array) $get(RecordEditor::LOADED))
-                && ! ($editor->config->isComparison() && $get(RecordEditor::SOURCE_LOCALE) === $locale->code))
-            ->childComponents(fn (Get $get): array => $panel->rows($get(RecordEditor::SOURCE_LOCALE), $get(RecordEditor::LOCALE) === $locale->code), 'rows')
+            ->visible(fn (Get $get): bool => array_key_exists($locale->code, (array) $get(RecordEditor::LOADED)))
+            ->childComponents(fn (): array => [$panel->content()], 'rows')
             ->childComponents([$panel->actions()], 'actions');
 
         return $panel;
     }
 
-    /**
-     * Built once per request for each source and visibility: only the
-     * visible panel carries the read-only source fields, so their state
-     * paths appear once on the page.
-     *
-     * @return array<mixed>
-     */
-    private function rows(?string $source, bool $isActive): array
+    private function content(): Group
     {
-        $withSource = $isActive && $this->editor->config->isComparison();
+        $editor = $this->editor;
+        $code = $this->locale->code;
 
-        return $this->rows[($withSource ? (string) $source : '').'|'.(int) $isActive]
-            ??= $this->editor->rows($this->locale, $source, $withSource);
+        return $this->content ??= Group::make(fn (): array => array_values(array_map(
+            fn (string $attribute, array $segments): AttributeGroup => AttributeGroup::make($editor, $this->locale, $attribute, $segments),
+            array_keys($groups = $editor->segmentsByAttribute($code)),
+            $groups,
+        )))
+            ->statePath(RecordEditor::TRANSLATIONS.'.'.$code)
+            ->dehydrated(fn (Group $component): bool => $editor->isChanged($component->getRootContainer(), $code))
+            ->validatedWhenNotDehydrated(false);
     }
 
     private function actions(): ActionGroup
@@ -94,18 +91,6 @@ final class LocalePanel extends Component
                 ->action(function () use ($editor, $code): void {
                     $editor->markOutdated($code);
                     $this->notify(__('tipi-filament-translations::editor.notifications.marked_outdated', ['locale' => $this->locale->name]));
-                });
-
-            $actions[] = Action::make('markOthersOutdated')
-                ->label(__('tipi-filament-translations::editor.actions.mark_others_outdated'))
-                ->icon(Heroicon::OutlinedArrowPath)
-                ->requiresConfirmation()
-                ->modalDescription(fn (): string => __('tipi-filament-translations::editor.actions.mark_others_outdated_description', ['locale' => $this->locale->name]))
-                ->visible(fn (): bool => $panel->getProgress()->hasContent()
-                    && array_diff($editor->record->getTranslatedLocales(), [$code]) !== [])
-                ->action(function () use ($editor, $code): void {
-                    $editor->markOthersOutdated($code);
-                    $this->notify(__('tipi-filament-translations::editor.notifications.marked_others_outdated'));
                 });
 
             if (($enum = TranslationState::statusEnum()) !== null) {
@@ -177,24 +162,24 @@ final class LocalePanel extends Component
         return $this->editor->config->isComparison();
     }
 
-    public function getSourceLocale(): ?Locale
+    public function getReferenceLocale(): Locale
     {
-        $code = $this->getRootContainer()->getRawState()[RecordEditor::SOURCE_LOCALE] ?? null;
+        $code = $this->getRootContainer()->getRawState()[RecordEditor::REFERENCE] ?? null;
+        $options = $this->editor->referenceOptions($this->locale->code);
 
-        return is_string($code) ? $this->editor->sourceOptions([])->get($code) : null;
+        return is_string($code) && $options->has($code) ? $options->get($code) : $this->editor->sourceLocale();
     }
 
-    public function getSourceProgress(): ?LocaleProgress
+    public function getSourceLocale(): Locale
     {
-        $source = $this->getSourceLocale();
-
-        return $source === null ? null : $this->editor->localeProgress($source->code);
+        return $this->editor->sourceLocale();
     }
 
-    /**
-     * The absolute state path of the navigation, for switching to this
-     * locale when it holds the first validation error.
-     */
+    public function hasSegments(): bool
+    {
+        return $this->editor->segments($this->locale->code) !== [];
+    }
+
     public function getNavigationStatePath(): string
     {
         $root = $this->getRootContainer()->getStatePath();
