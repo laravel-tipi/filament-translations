@@ -10,6 +10,7 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\Relation;
 use Tipi\Translations\Contracts\TranslatableModel;
+use Tipi\Translations\Filament\Actions\TranslateAction;
 use Tipi\Translations\Filament\Editor\RecordEditor;
 use Tipi\Translations\Filament\Resources\Concerns\Translatable;
 use Tipi\Translations\Filament\Support\LocaleProgress;
@@ -167,7 +168,7 @@ class TranslationsColumn extends Column
 
         $action = $this->getTable()->getAction($this->actionName);
 
-        if (method_exists($action, 'getEditorConfig')) {
+        if ($action instanceof TranslateAction) {
             return $this->editorConfig = $action->getEditorConfig();
         }
 
