@@ -17,24 +17,26 @@ class WineResource extends Resource
 }
 ```
 
-- **One form, every locale.** Standard Filament fields, defined once.
-- **Two layouts.** A side-by-side **comparison** editor (read-only source next to the editable target), or a **locale-focused** form switched with tabs or a select.
-- **Two presentations.** A **page** with its own URL, or a **modal** or slide-over. Any layout works in any presentation.
-- **Exact values.** Editors see and save exactly what is stored for each locale, never fallback text.
-- **Status at a glance.** Per-field, per-locale and per-record progress, outdated translations, table badges and filters.
-- **Safe saves.** One transaction for every changed locale, conflict detection, and locale-level permissions.
+- **Translators translate text, authors keep the structure.** Plain text, Markdown, rich text, repeaters and builders are split into text segments, each edited in a plain textarea. Formatting and links are numbered tags translators can move (`This is <b1>excellent</b1> wine`), never markup they can break. Items, blocks, URLs, images and settings stay the source's.
+- **Checked reconstruction.** Every translated value is rebuilt from the source's structure and read back; a text the format can't express is refused with a reason, never stored differently.
+- **Completeness from the source.** What the source has text for needs translating, nothing else. Drafts are always saved; progress ("7 of 10") follows the source as it changes.
+- **No lost updates.** Saves merge with what others saved meanwhile (other locales, fields, paragraphs, items) inside one locked transaction, and refuse what overlaps, keeping the translator's text.
+- **Two layouts, three presentations.** The source (or another language) beside the translation, or one locale at a time with tabs or a select; on a page, in a modal or a slide-over.
+- **Status at a glance.** Per-segment, per-locale and per-record progress, outdated translations, table badges and filters.
 - **Every storage.** JSON columns, translation tables and the shared table work the same.
 
 ## Contents
 
 - [Requirements](#requirements) · [Installation](#installation)
 - [Minimal setup](#minimal-setup)
-- [The translation form](#the-translation-form)
+- [The translation form](#the-translation-form): declaring content, supported fields
+- [Translating text](#translating-text): segments, tags, placeholders, items
 - [Choosing an editor](#choosing-an-editor): presentation, layout, navigation, the four combinations
 - [Panel defaults and overrides](#panel-defaults-and-overrides)
 - [Locales and contexts](#locales-and-contexts)
-- [Status and completeness](#status-and-completeness): editor, table column, filter, translation states
+- [Status and completeness](#status-and-completeness): what counts, editor, table column, filter, translation states
 - [Saving](#saving): the editing contract
+- [Concurrent editing](#concurrent-editing): merges, conflicts, guarantees
 - [Validation](#validation)
 - [Authorization](#authorization)
 - [Storage independence](#storage-independence)
@@ -43,7 +45,8 @@ class WineResource extends Resource
 ## Requirements
 
 - PHP 8.5+, Laravel 13, Filament 5.10+
-- `laravel-tipi/translations` 0.2+ and `laravel-tipi/localization` 0.2+
+- `laravel-tipi/translations` 0.2+ (with `lockTranslationsForUpdate()`) and `laravel-tipi/localization` 0.2+
+- `ext-dom` (PHP's HTML5 parser) and `league/commonmark` 2.7+, which Laravel already requires
 
 ## Installation
 
@@ -112,44 +115,96 @@ protected function getHeaderActions(): array
 
 ## The translation form
 
-`translationForm()` returns ordinary Filament components named after translatable attributes. The editor builds it **once per locale**, binds each copy to that locale, and in the comparison layout pairs every field with a read-only copy bound to the source locale.
-
-```php
-public static function translationForm(Schema $schema): Schema
-{
-    return $schema->components([
-        TextInput::make('name')->required(),
-        Textarea::make('excerpt')->rows(3),
-        RichEditor::make('description'),
-        Section::make('SEO')->schema([
-            TextInput::make('seo_title')->maxLength(60),
-            Textarea::make('seo_description')->maxLength(160),
-        ]),
-        Repeater::make('tasting_notes')->schema([
-            TextInput::make('note')->required(),
-        ]),
-    ]);
-}
-```
-
-- **Standard fields work as they do anywhere**, because each field hydrates and dehydrates its own state: rich text is stored as HTML (or JSON with `->json()`), repeaters and tags as the arrays they produce. The suite covers text inputs, textareas, rich editors, tags inputs and repeaters (with nested validation); other fields work the same way when their state fits the attribute. Use array-valued attributes (JSON storage, shared storage, or an `array` cast on the translation model) for repeaters, builders and tags.
-- **Layout components** (`Section`, `Grid`, `Group`, `Fieldset`, `Tabs`) are kept. Their fields are paired one by one in the comparison layout, so source and target rows line up inside sections. Give layout children as arrays: children built by a closure are built before the editor exists.
-- **A component with its own state path** (a field, or a `Group::make()->statePath('seo')` over a JSON attribute) is edited as one unit: a repeater is compared with the source repeater as a whole.
-- **Names must be translatable attributes.** A field that isn't (or isn't declared in `#[Translatable]`) throws a `LogicException` when the editor is built. Translatable attributes left out of the form are never written by the editor and don't count towards completeness.
-- **Per-locale behavior**: the form receives the locale being built, so rules can depend on it.
+`translationForm()` **declares** the translatable content with the fields that author it. The editor reads it to know each attribute's format and structure; it never shows these fields to translators.
 
 ```php
 public static function translationForm(Schema $schema, ?Locale $locale = null): Schema
 {
     return $schema->components([
-        TextInput::make('name')
-            ->required($locale?->isDefault() ?? true)  // required in the default locale only
-            ->maxLength($locale?->code === 'de' ? 40 : 60),
+        TextInput::make('name')->maxLength($locale?->code === 'de' ? 40 : 60),
+        RichEditor::make('description'),
+        MarkdownEditor::make('tasting_notes'),
+        Repeater::make('features')->schema([
+            Hidden::make('id'),               // a stable item id: see "Items"
+            TextInput::make('title'),
+            Textarea::make('text'),
+            FileUpload::make('icon'),         // not text: kept from the source
+        ]),
+        Builder::make('content')->blocks([
+            Block::make('heading')->schema([TextInput::make('text'), Select::make('level')->options([...])]),
+            Block::make('quote')->schema([Textarea::make('text'), TextInput::make('author')]),
+        ]),
     ]);
 }
 ```
 
-`Tipi\Support\Locale` carries the code, names, text direction and flags of the locale.
+| Field | Translated as |
+|---|---|
+| `TextInput` | one single-line segment; `maxLength()` / `minLength()` / `length()` apply |
+| `Textarea` | one multi-line segment; length limits apply |
+| `MarkdownEditor` | a segment per block (paragraph, heading, list item, quote, table cell) and per image description |
+| `RichEditor` | the same, for its HTML; TipTap JSON (`->json()`) is converted with the field's own editor |
+| `Repeater` | its items' text fields; `->simple()` repeaters item by item |
+| `Builder` | its blocks' text fields, by block type |
+
+- **Inside items**, only text fields are translated. Every other value (selects, toggles, files, numbers, emails, URLs, undeclared keys, blocks of undeclared types) is the source's.
+- **Layout components** (`Section`, `Grid`, `Group`, `Tabs`) only group the declaration. A layout component with a state path (`Group::make([...])->statePath('seo')`) declares keys of one attribute.
+- **Names must be translatable attributes**, and top-level fields must be one of the fields above; anything else throws a `LogicException` when the editor is built. Translatable attributes left out of the form are never written and don't count towards completeness.
+- **`required()` doesn't block drafts.** What has to be translated follows from the source's content, not from the form's rules.
+- The form receives the target locale, so limits can depend on it (as for `name` above).
+
+Why not derive this from the resource's `form()`? Content forms mix translatable and other fields, depend on the operation and the record, and are costly to build for every table row. The declaration is explicit, cheap and usually a copy of the translatable part of the content form.
+
+## Translating text
+
+### Segments
+
+The **source** decides what there is to translate: each text of its content is a segment. In the comparison layout each segment shows the source text beside a textarea; in the locale-focused layout above it. Segments sit under their attribute, labelled with where they are ("2 · Quote › Author", "List item").
+
+Blank means not translated. A partly translated document keeps the source's structure with untranslated blocks empty (an empty `<p>` in HTML, a zero-width space in Markdown, where a paragraph can't be empty), so it lines up with the source when reopened. Its source text is never stored in its place.
+
+### Tags
+
+Inline formatting is shown as numbered tags:
+
+```
+Source:       This is <b1>excellent</b1> wine, see <a2>the map</a2>. Run <code3/>.
+Translation:  <a2>რუკაზე</a2> ნაჩვენები <b1>შესანიშნავი</b1> ღვინოა. გაუშვით <code3/>.
+```
+
+- **Pairs** (`<b1>…</b1>`) are bold, italic, links and other formatting around text. Translators may move them, change their order and nest them differently, so word order can change.
+- **Voids** (`<code3/>`) are content kept as is: inline code, images, merge tags, embeds, formatting without text (a linked image).
+- Every tag of the source must be kept exactly once, well nested; a missing, unknown, doubled or crossing tag is refused with a reason. Tags show their meaning on hover ("Link: https://…").
+- Attributes are the source's: a link points where the source's link points, also after the source changes it.
+- Typed markup is text: `<script>` in a translation is stored as `&lt;script&gt;`.
+- **Copy** puts the source (or reference) text, tags included, into the textarea, to translate around them.
+
+Rebuilding is checked: the rebuilt value is parsed again and must have the source's structure and exactly the translated texts. When Markdown can't express a translation (emphasis directly between a letter and punctuation, `ა**"x"**ბ`, isn't emphasis in Markdown), the segment is refused and the message suggests moving the tag.
+
+### Placeholders
+
+`{{ name }}`, `{name}`, `:name` and `%s` / `%1$d` must appear in a translation as often as in the source. Change the patterns, or check none:
+
+```php
+$editor->placeholders(['/%[a-z_]+%/']);
+$editor->placeholders([]);
+```
+
+### Items
+
+Repeater and builder items are identified by their **id** field (`id` by default, `->itemKey('uuid')` for another). With ids, translations follow their items when the source adds, removes or reorders them. Filament stores items without ids, so add one to reorderable content:
+
+```php
+Hidden::make('id')->default(fn (): string => (string) Str::ulid()),
+```
+
+Items without an id are matched by position, and only while their data other than text (type, image, settings) is unchanged: a translation is never assigned to an item that changed. Reordering items that differ only in their texts can't be told apart without ids.
+
+When the source's structure changed after a translation was saved (a paragraph added, an item's type changed), the texts that no longer fit are not shown in its fields: they are listed under the attribute, to copy from. Untouched, the stored translation stays as it is.
+
+### Not supported
+
+Text inside `<pre>` and code blocks, HTML blocks in Markdown, custom rich editor blocks and non-text fields are kept from the source, not translated. `title` attributes aren't translated. Tags input, key-value and select fields can't be translated as text.
 
 ## Choosing an editor
 
@@ -157,14 +212,14 @@ Presentation and layout are independent. Every combination uses the same form, l
 
 | | Presentation | |
 |---|---|---|
-| `page()` | A resource page: `/wines/{record}/translations?locale=ka&source=en`. Deep links, reloads, browser history, breadcrumbs, unsaved-changes warnings. | |
+| `page()` | A resource page: `/wines/{record}/translations?locale=ka&reference=de`. Deep links, reloads, browser history, breadcrumbs, unsaved-changes warnings. | |
 | `modal()` | A modal over the table or page. **Default.** | |
 | `slideOver()` | A modal sliding over from the side. | |
 
 | | Layout | |
 |---|---|---|
-| `comparison()` | Each target field beside the same field of a read-only source locale. **Default.** For professional translation. | |
-| `localeTabs()` | One locale at a time, switched with tabs. Like a conventional multilingual form. | |
+| `comparison()` | Each segment's source text (or another language's, as reference) beside its translation. **Default.** | |
+| `localeTabs()` | One locale at a time, switched with tabs, with the source text above each textarea. | |
 | `localeSelect()` | The same, switched with a select: compact, for many locales. | |
 
 Tabs and select are two navigations of the same layout. The comparison layout switches its **target** locale with tabs up to five locales and a select above; force one with `comparison(LocaleNavigation::Select)`.
@@ -209,7 +264,7 @@ public static function getPages(): array
 }
 ```
 
-`TranslateAction` and the column's locale badges then link to it. The URL follows the shown locale and source (`?locale=ka&source=en`), so editors can share and bookmark links and use the back button. **Save** keeps the editor open; **Back** returns to the previous page (the browser's history, so a table keeps the filters and search in its URL).
+`TranslateAction` and the column's locale badges then link to it. The URL follows the shown locale and reference (`?locale=ka&reference=de`), so editors can share and bookmark links and use the back button. **Save** keeps the editor open; **Back** returns to the previous page (the browser's history, so a table keeps the filters and search in its URL).
 
 ### The modal
 
@@ -249,7 +304,9 @@ The editor's methods:
 | `context(?string $context)` | The locale context the content is published in. |
 | `locales(array\|Closure\|null $locales)` | The locales to edit instead of the context's. |
 | `inactiveLocales(bool $condition = true)` | Also offer inactive locales. |
-| `sourceLocale(string\|Closure\|null $locale)` | The source the comparison opens with. |
+| `sourceLocale(string\|Closure\|null $locale)` | The canonical source: what is translated, never a target. The global default locale by default; a closure receives the record. |
+| `placeholders(?array $patterns)` | The placeholders translations must keep. |
+| `itemKey(?string $key)` | The id field of repeater and builder items (`id`). |
 | `form(Closure $form)` | The form, for records outside a translatable resource. |
 
 ## Locales and contexts
@@ -257,11 +314,13 @@ The editor's methods:
 The editor edits the locales of the **content** locale context, not the panel's interface locale. An admin panel in Georgian can edit English, German and Arabic content.
 
 - **Default**: the locales of Localization's default context (usually `web`, where content is published), in display order.
-- `->context('web')`: another context. Its locales are offered, its default is the default source, and fallback status is shown as that context's readers see it.
+- `->context('web')`: another context. Its locales are offered, and fallback status is shown as that context's readers see it.
 - `->locales(['en', 'ka', 'de'])` or a closure receiving the record: an explicit list. Any registry locale may be listed, active or not.
 - `->inactiveLocales()`: add the registry's inactive locales, to prepare content before a locale goes live. They are marked **Inactive** everywhere.
 
-The source locale of the comparison layout defaults to the configured `sourceLocale()`, then the context default, then the global default (whichever has content). Editors can choose any locale with content as the source. If the chosen source has no value for a field, the source field is empty: the editor never substitutes another locale.
+**The canonical source** is the global default locale, the language content is authored in, unless `sourceLocale()` says otherwise (per record with a closure). It decides which texts need translating and the structure translations keep, and it is never a target: it is edited in the content form. The comparison layout can show another language **beside** the target (**Show beside**), for translators who translate better from it; that never changes what is translated or what counts as complete. Where the reference language has no text for a segment, the editor says so: it never substitutes another locale.
+
+Five locales are in play and kept apart: the global default, the context's default, the panel's interface locale, the reference shown beside the target, and the target.
 
 Locales are shown with their names, native names and text direction. Inputs get `lang` and `dir` (`dir="rtl"` for Arabic), so right-to-left content is edited right-to-left while labels keep the interface's direction.
 
@@ -269,26 +328,26 @@ Filament Localization isn't required. When you use it, its panel context drives 
 
 ## Status and completeness
 
-Completeness counts the attributes of the translation form.
+Completeness is measured against the source's content, segment by segment, when it is read. Nothing is stored, so it stays right when the source changes.
 
-| Field status | |
-|---|---|
-| **Translated** | A value is stored for the locale. |
-| **Fallback** | Nothing is stored; readers of the content context see another locale (shown: "readers see English"). |
-| **Missing** | Nothing is stored and nothing falls back. |
+- A segment counts when the source has text for it. An empty or optional source field, an empty Markdown or rich text document (`<p></p>`), whitespace, an item without text and an image without alt text need no translation.
+- Text is any string or number with non-whitespace content; `null`, `false` and arrays are not text.
+- Stored translations that no longer line up with the source (its structure changed) don't count, and the locale is flagged for review.
+- Translations are never required: drafts save, and their progress is shown.
 
 | Locale status | |
 |---|---|
-| **Complete** | Every attribute is translated. |
+| **Complete** | Every segment with source text is translated. |
 | **Incomplete** | Some are. |
 | **Not translated** | None are. |
+| **Nothing to translate** | The source has no text. |
 | **Outdated** | Marked for review (models with translation states). Independent of completeness. |
 
-Fallback is never counted as translated, and fields are never filled with fallback text.
+Per attribute, the editor shows its progress and, while nothing is stored, what readers of the content context see instead ("readers see English"). Fallback is never counted as translated, and fields are never filled with fallback text.
 
 ### In the editor
 
-The locale navigation shows each locale's progress ("4/6"), an outdated clock and validation errors. The panel header shows the progress and whether the locale is outdated or inactive. Under every field, its status, and in the comparison layout a **Copy source** action that copies the stored source value, formatting and items included.
+The locale navigation shows each locale's progress ("4/6"), an outdated clock and validation errors. The panel header shows the progress and whether the locale is outdated or inactive. Under every segment, whether it is translated, and a **Copy** button for the reference text.
 
 ### In the table
 
@@ -298,15 +357,16 @@ The column eager loads `translations` (and `translationStates`), so it costs no 
 
 ### Filtering
 
-`TranslationStatusFilter` filters by a locale's status: not translated, incomplete, complete and, with translation states, outdated. It uses the Translations query scopes, so it works on every storage.
+`TranslationStatusFilter` filters by a locale's status: not translated, incomplete, complete and, with translation states, outdated. It runs in SQL with the Translations query scopes, so it works on every storage, at the attribute level: an attribute counts as translated when the locale has a value for it and needed when the source has one. A partly translated document counts as translated there; the column and the editor count its segments.
 
 ### Translation states
 
 With `HasTranslationStates` on the model, the editor's locale menu offers:
 
 - **Mark as outdated** and **Mark as up to date**;
-- **Mark other languages as outdated**, after changing a source text;
 - **Change status**, when `translations.states.status_enum` is configured.
+
+After changing source texts in the content form, mark the translations outdated there with `$record->markOtherTranslationsOutdated($source)` (Translations).
 
 Saving a change to a locale marks it up to date, as Translations does on every save. Without states, these actions and the outdated filter aren't shown.
 
@@ -314,22 +374,46 @@ Saving a change to a locale marks it up to date, as Translations does on every s
 
 The editing contract, the same in every presentation and layout:
 
-1. **Exact values.** Fields are filled with exactly what is stored for their locale (`getTranslation($attribute, $locale)`), never with fallback values.
-2. **Locales load when opened.** Switching locales loads the new one and keeps unsaved changes in the others.
-3. **One save for every changed locale.** **Save** validates and writes every opened locale whose fields changed, in one `save()` of the model: one transaction, unchanged values not written. Locales only looked at are neither validated nor saved. The source, other locales and attributes outside the form are never written.
-4. **Empty means not translated.** Clearing a field (empty text, an empty rich editor, an empty repeater) removes the value, so readers see the fallback. The editor never stores empty strings.
-5. **Conflicts are refused.** If someone else saved a locale you changed after you opened it, nothing is saved, your changes stay in the form, and a notification names the locale. Locales you didn't change never conflict.
-6. **Validation failures keep your input.** The editor shows the first locale with errors; the navigation marks every locale with errors.
+1. **Exact values.** Segments show exactly what is stored for their locale, never fallback text.
+2. **Locales load when opened.** Switching locales loads the new one and keeps unsaved texts in the others.
+3. **One save for every changed locale.** **Save** checks and writes every opened locale with changed segments, in one locked transaction. Locales only looked at are neither checked nor saved. The source, other locales and attributes outside the form are never written.
+4. **Structure from the source.** Each changed attribute is rebuilt from the source's current structure with the translated texts, and checked.
+5. **Blank means not translated.** Clearing every segment of an attribute removes its value, so readers see the fallback. The editor never stores empty strings or the source's text.
+6. **Problems keep your input.** A refused text is marked at its segment with the reason; the navigation marks locales with errors.
 
-On the page, leaving with unsaved changes asks for confirmation (with the panel's `unsavedChangesAlerts()`); switching locales or the source isn't a change. Modals warn before the browser leaves the page, like every Filament action.
+On the page, leaving with unsaved changes asks for confirmation (with the panel's `unsavedChangesAlerts()`); switching locales or the reference isn't a change.
 
 **Delete translation** in a locale's menu removes every value of that locale, after confirmation.
 
+## Concurrent editing
+
+Saving reads what is stored **now** and decides there, inside `lockTranslationsForUpdate()` of Translations: the record's row is locked and its translations are read again with locking reads, so no other save can change them between the check and the write, in any storage. Nothing is decided from the copy the editor loaded.
+
+| Two editors change… | Result |
+|---|---|
+| different locales | both kept |
+| different fields of a locale | both kept |
+| different paragraphs, list items or repeater items of a field | both kept (merged segment by segment) |
+| the same segment, differently | the second save is refused |
+| a translation while the author changed that segment's source text | refused |
+| a field while the author changed its source structure (added a paragraph, reordered or retyped items) | refused for that field |
+| anything, on a record deleted meanwhile | refused: "this record was deleted" |
+| translation states (outdated, status) | kept; saving a locale marks it up to date |
+
+A refused save writes nothing, not even its other changes, and the transaction rolls back on any failure. The editor then:
+
+- keeps every text the translator typed, and loads what is stored now around them;
+- marks each conflicting segment: the other text, with **Use their text**, or "the source text changed";
+- lists texts whose field's source structure changed, to copy into the new segments;
+- names each conflict in a notification ("Georgian › Description: someone else saved it").
+
+Saving again, after reviewing, saves the translator's texts: nothing is ever overwritten without a conflict having been shown first. The editor's loaded state is checked only for the translator's own conflicts; authorization and the written segments always come from the server.
+
+On SQLite, which has no row locks, writers are serialized by the database lock. On MariaDB with snapshot isolation, a save that started reading before another committed fails with a deadlock error instead of reading stale data.
+
 ## Validation
 
-Use field validation as in any Filament form: `required()`, `maxLength()`, `rules()`, custom rules. It applies to each locale separately, and the form's [locale parameter](#the-translation-form) allows rules per locale. Nested fields (repeaters, builders) are validated normally. Errors appear on the field of the locale they belong to.
-
-The read-only source fields are never validated.
+Changed segments are checked on save: tags, placeholders, line breaks in single-line fields and the declared length limits, per locale (the form receives the locale). Unchanged texts are never checked, so stored text never blocks a draft. Field rules other than length (`required()`, `rules()`) don't apply to translations: completeness replaces `required()`.
 
 ## Authorization
 
@@ -360,7 +444,7 @@ Without `translate`, translating requires the resource's edit permission (`canEd
 
 ## Storage independence
 
-JSON, table and shared storage behave identically: the editor reads with `getTranslation()` and `getTranslatedLocales()`, writes with `setTranslations()` and `save()`, deletes with `forgetTranslations()`, and queries with `whereHasTranslation()` and `whereDoesntHaveTranslation()`. Nothing in this package depends on where translations are stored, and models with different storages work side by side.
+JSON, table and shared storage behave identically: the editor reads with `getTranslation()` and `getTranslatedLocales()`, writes with `setTranslation()` inside `lockTranslationsForUpdate()`, deletes with `forgetTranslations()`, and queries with `whereHasTranslation()` and `whereDoesntHaveTranslation()`. Nothing in this package depends on where translations are stored, and models with different storages work side by side. Structured attributes (repeaters, builders, TipTap JSON) need array values: JSON or shared storage, or an `array` cast on the translation model.
 
 ## Advanced
 
@@ -395,12 +479,14 @@ php artisan vendor:publish --tag=tipi-filament-translations-translations
 php artisan vendor:publish --tag=tipi-filament-translations-views
 ```
 
-The stylesheet uses Filament's color variables and container queries: the comparison layout switches between side by side and stacked on the editor's own width, so pages, modals and slide-overs behave the same.
+The stylesheet uses Filament's color variables and container queries: the comparison layout switches between side by side and stacked on the editor's own width, so pages, modals and slide-overs behave the same. Tags are shown left to right inside right-to-left text.
 
 ## Development
 
 ```bash
-composer check                                       # Pint + the suite
+composer check                                       # Pint + unit and feature tests
+npm install && npx playwright install chromium       # once, for browser tests
+composer test:browser                                # browser tests (Playwright)
 vendor/bin/testbench workbench:build && vendor/bin/testbench serve
 ```
 
