@@ -5,6 +5,7 @@ declare(strict_types=1);
 use Filament\Actions\Testing\TestAction;
 use Illuminate\Database\Eloquent\Model;
 use Livewire\Livewire;
+use Tipi\Translations\Filament\Content\Nodes\Node;
 use Tipi\Translations\Filament\Tests\Fixtures\EditorSettings;
 use Tipi\Translations\Filament\Tests\Fixtures\Models\Grape;
 use Tipi\Translations\Filament\Tests\Fixtures\Models\Region;
@@ -102,4 +103,20 @@ function openEditor(string $presentation, Model $record, ?string $locale = null,
 function configureEditor(Closure $configure): void
 {
     EditorSettings::$resource = $configure;
+}
+
+/**
+ * Segment texts by path.
+ *
+ * @return array<string, string>
+ */
+function texts(Node $node, mixed $value): array
+{
+    $texts = [];
+
+    foreach ($node->segments('body', '', [], $value) as $segment) {
+        $texts[$segment->path] = $segment->text;
+    }
+
+    return $texts;
 }

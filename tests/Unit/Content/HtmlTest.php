@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use Tipi\Translations\Filament\Content\Alignment;
 use Tipi\Translations\Filament\Content\Formats\Html;
+use Tipi\Translations\Filament\Content\Formats\RichText;
 use Tipi\Translations\Filament\Content\InvalidTranslation;
 use Tipi\Translations\Filament\Content\Nodes\DocumentNode;
 
@@ -98,4 +99,25 @@ it('treats documents without text as empty', function (): void {
 it('checks tags against the source run', function (): void {
     expect(fn () => richText()->rebuild('', '<p>A <strong>b</strong></p>', ['0~0' => 'ა ბ']))
         ->toThrow(InvalidTranslation::class);
+});
+
+it('translates rich text stored as TipTap JSON, and keeps it JSON', function (): void {
+    $node = new DocumentNode(new RichText);
+
+    $source = ['type' => 'doc', 'content' => [
+        ['type' => 'paragraph', 'content' => [
+            ['type' => 'text', 'text' => 'Very '],
+            ['type' => 'text', 'text' => 'dry', 'marks' => [['type' => 'bold']]],
+            ['type' => 'text', 'text' => ' red.'],
+        ]],
+    ]];
+
+    expect(texts($node, $source))->toBe(['0~0' => 'Very <b1>dry</b1> red.']);
+
+    $translated = $node->rebuild('', $source, ['0~0' => '<b1>მშრალი</b1> წითელი.']);
+
+    expect($translated)->toBeArray()
+        ->and($translated['type'])->toBe('doc')
+        ->and($translated['content'][0]['content'][0])->toMatchArray(['type' => 'text', 'text' => 'მშრალი', 'marks' => [['type' => 'bold']]])
+        ->and(texts($node, $translated))->toBe(['0~0' => '<b1>მშრალი</b1> წითელი.']);
 });

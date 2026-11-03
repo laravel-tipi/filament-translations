@@ -13,22 +13,6 @@ function markdown(): DocumentNode
     return new DocumentNode(new Markdown);
 }
 
-/**
- * Segment texts by path.
- *
- * @return array<string, string>
- */
-function texts(DocumentNode $node, mixed $value): array
-{
-    $texts = [];
-
-    foreach ($node->segments('body', '', [], $value) as $segment) {
-        $texts[$segment->path] = $segment->text;
-    }
-
-    return $texts;
-}
-
 function html(string $markdown): string
 {
     return trim((new GithubFlavoredMarkdownConverter)->convert($markdown)->getContent());
