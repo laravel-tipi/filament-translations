@@ -16,7 +16,7 @@ use Tipi\Translations\Filament\Tests\Support\Editor;
 use Tipi\Translations\Filament\Tests\TestCase;
 use Tipi\Translations\Filament\TranslationEditor;
 
-uses(TestCase::class)->in('Feature', 'Unit');
+uses(TestCase::class)->in('Feature', 'Unit', 'Browser');
 
 /**
  * The three storages: model, resource, and the attributes of its form.

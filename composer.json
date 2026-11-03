@@ -29,6 +29,7 @@
         "laravel/pint": "^1.32",
         "orchestra/testbench": "^11.3",
         "pestphp/pest": "^5.3",
+        "pestphp/pest-plugin-browser": "^5.2",
         "pestphp/pest-plugin-laravel": "^5.0"
     },
     "autoload": {
@@ -49,12 +50,18 @@
         }
     },
     "scripts": {
-        "test": "pest",
+        "test": "pest --exclude-testsuite=Browser",
+        "test:browser": "pest --testsuite=Browser",
         "format": "pint",
         "format:test": "pint --test",
         "check": [
             "@format:test",
             "@test"
+        ],
+        "check:all": [
+            "@format:test",
+            "@test",
+            "@test:browser"
         ]
     },
     "config": {
@@ -66,5 +73,11 @@
     "support": {
         "issues": "https://github.com/laravel-tipi/filament-translations/issues",
         "source": "https://github.com/laravel-tipi/filament-translations"
+    },
+    "scripts-descriptions": {
+        "test": "Run the unit and feature tests.",
+        "test:browser": "Run the browser tests (needs: npm install && npx playwright install chromium).",
+        "check": "Check formatting and run the unit and feature tests.",
+        "check:all": "Check formatting and run every test, browser tests included."
     }
 }

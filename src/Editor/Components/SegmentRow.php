@@ -51,8 +51,12 @@ final class SegmentRow extends Component
         $segment = $this->segment;
         $code = $this->locale->code;
 
+        $label = $this->getLabel();
+        $attribute = $this->editor->schema()->label($segment->attribute);
+
         return Textarea::make($segment->key())
-            ->label($this->getLabel())
+            // For screen readers: the field, where in it, and the language.
+            ->label(($label === $attribute ? $label : "{$attribute} › {$label}").' ('.$this->locale->name.')')
             ->hiddenLabel()
             ->rows(1)
             ->autosize()

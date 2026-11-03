@@ -401,7 +401,26 @@ final class HtmlDocument implements Document
         return isset(self::PAIRS[$element->localName]) && ! $element->hasAttribute('data-type');
     }
 
+    /**
+     * What a run is, by its block, or for a plain paragraph by the list
+     * item, quote or cell it sits in (rich editors wrap their text in <p>).
+     */
     private static function role(Element $block): string
+    {
+        if ($block->localName === 'p' || $block->localName === 'div') {
+            for ($parent = $block->parentElement; $parent !== null && $parent->localName !== 'body'; $parent = $parent->parentElement) {
+                $role = self::blockRole($parent);
+
+                if ($role !== 'paragraph') {
+                    return $role;
+                }
+            }
+        }
+
+        return self::blockRole($block);
+    }
+
+    private static function blockRole(Element $block): string
     {
         return match ($block->localName) {
             'h1', 'h2', 'h3', 'h4', 'h5', 'h6' => 'heading',

@@ -19,7 +19,7 @@
 
         @if ($fallback !== null && $progress['total'] > 0)
             <span class="fi-tipi-tr-muted">
-                {{ __('tipi-filament-translations::editor.attribute.fallback', ['locale' => $fallback->name]) }}
+                · {{ __('tipi-filament-translations::editor.attribute.fallback', ['locale' => $fallback->name]) }}
             </span>
         @endif
     </div>
