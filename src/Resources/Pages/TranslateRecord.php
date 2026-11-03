@@ -231,6 +231,8 @@ abstract class TranslateRecord extends Page
             Action::make('save')
                 ->label(__('tipi-filament-translations::editor.action.save'))
                 ->submit('save')
+                // Only changed locales are validated, on the server.
+                ->extraAttributes(['formnovalidate' => true])
                 ->keyBindings(['mod+s']),
             Action::make('cancel')
                 ->label(__('tipi-filament-translations::editor.page.back'))

@@ -77,6 +77,9 @@ class TranslateAction extends Action
             ->stickyModalHeader()
             ->stickyModalFooter()
             ->modalSubmitActionLabel(__('tipi-filament-translations::editor.action.save'))
+            // The server validates only changed locales: the browser must not
+            // block saving over required fields of locales opened only to look.
+            ->modalSubmitAction(fn (Action $action): Action => $action->extraAttributes(['formnovalidate' => true]))
             ->mountUsing(function (TranslateAction $action, ?Schema $schema, array $arguments): void {
                 $editor = $action->requireRecordEditor();
 
