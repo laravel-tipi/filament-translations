@@ -1,0 +1,191 @@
+/*
+ * Tipi Filament Translations. Plain CSS on Filament's color variables, so it
+ * needs no build step and follows the panel's theme, dark mode and RTL.
+ * Comparison rows respond to the width of the editor, not the viewport, so
+ * the same rules suit pages, modals and slide-overs.
+ */
+
+.fi-tipi-tr-muted {
+    color: var(--gray-500);
+    font-size: 0.875em;
+}
+
+/* Navigation */
+
+.fi-tipi-tr-nav .fi-tabs {
+    max-width: 100%;
+}
+
+.fi-tipi-tr-nav-select {
+    display: grid;
+    gap: 0.5rem;
+    max-width: 24rem;
+}
+
+.fi-tipi-tr-nav-select-label {
+    font-size: 0.875rem;
+    font-weight: 500;
+    line-height: 1.5rem;
+    color: var(--gray-950);
+}
+
+:where(.dark) .fi-tipi-tr-nav-select-label {
+    color: var(--color-white, #fff);
+}
+
+/* Locale panel */
+
+.fi-tipi-tr-panel {
+    container-type: inline-size;
+    display: grid;
+    gap: 1.25rem;
+}
+
+.fi-tipi-tr-panel[hidden] {
+    display: none !important;
+}
+
+.fi-tipi-tr-panel-header {
+    display: grid;
+    gap: 0.75rem;
+    padding-block-end: 0.75rem;
+    border-block-end: 1px solid var(--gray-200);
+}
+
+:where(.dark) .fi-tipi-tr-panel-header {
+    border-color: color-mix(in oklab, var(--gray-50) 10%, transparent);
+}
+
+.fi-tipi-tr-heading {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+    min-width: 0;
+}
+
+.fi-tipi-tr-heading-role {
+    font-size: 0.75rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--gray-500);
+}
+
+.fi-tipi-tr-heading-locale {
+    font-weight: 600;
+    color: var(--gray-950);
+}
+
+:where(.dark) .fi-tipi-tr-heading-locale {
+    color: var(--color-white, #fff);
+}
+
+.fi-tipi-tr-heading-actions {
+    margin-inline-start: auto;
+}
+
+.fi-tipi-tr-notice {
+    margin: 0;
+    padding: 0.625rem 0.875rem;
+    border-radius: 0.5rem;
+    font-size: 0.875rem;
+    color: var(--warning-800);
+    background: var(--warning-50);
+}
+
+:where(.dark) .fi-tipi-tr-notice {
+    color: var(--warning-300);
+    background: color-mix(in oklab, var(--warning-400) 10%, transparent);
+}
+
+/* Rows */
+
+.fi-tipi-tr-rows,
+.fi-tipi-tr-rows .fi-sc {
+    row-gap: 1.5rem;
+}
+
+.fi-tipi-tr-row {
+    display: grid;
+    gap: 0.75rem;
+    min-width: 0;
+}
+
+.fi-tipi-tr-cell {
+    display: grid;
+    gap: 0.5rem;
+    min-width: 0;
+}
+
+.fi-tipi-tr-cell-source {
+    padding: 0.75rem;
+    border-radius: 0.75rem;
+    background: var(--gray-50);
+}
+
+:where(.dark) .fi-tipi-tr-cell-source {
+    background: color-mix(in oklab, var(--gray-50) 4%, transparent);
+}
+
+/* On narrow editors, cells stack: name each cell's language. */
+.fi-tipi-tr-cell-locale {
+    justify-self: start;
+    font-size: 0.75rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--gray-500);
+}
+
+.fi-tipi-tr-row-footer {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+}
+
+.fi-tipi-tr-row-footer .fi-sc {
+    display: flex;
+}
+
+/* Long source texts stay readable without stretching the row. */
+.fi-tipi-tr-cell-source textarea,
+.fi-tipi-tr-cell-source .fi-fo-rich-editor-content {
+    max-height: 32rem;
+    overflow-y: auto;
+}
+
+/* Side by side when the editor is wide enough: headings align with cells. */
+@container (min-width: 44rem) {
+    .fi-tipi-tr-panel-comparison .fi-tipi-tr-panel-header,
+    .fi-tipi-tr-row-comparison {
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+        column-gap: 1.5rem;
+    }
+
+    .fi-tipi-tr-row-comparison .fi-tipi-tr-cell-locale {
+        display: none;
+    }
+}
+
+/* Table column */
+
+.fi-tipi-tr-column {
+    padding: 0.75rem 1rem;
+}
+
+.fi-tipi-tr-column-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.fi-tipi-tr-column-inactive {
+    opacity: 0.7;
+    border-style: dashed;
+}

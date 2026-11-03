@@ -6,44 +6,50 @@ namespace Tipi\Translations\Filament\Actions;
 
 use Closure;
 use Filament\Actions\Action;
-use Filament\Forms\Components\Select;
-use Filament\Infolists\Components\TextEntry;
 use Filament\Notifications\Notification;
-use Filament\Schemas\Components\Utilities\Get;
-use Filament\Schemas\Components\Utilities\Set;
-use Filament\Support\Enums\TextSize;
+use Filament\Resources\Resource;
+use Filament\Schemas\Schema;
 use Filament\Support\Enums\Width;
+use Filament\Support\Icons\Heroicon;
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Support\Collection;
-use Illuminate\Support\Facades\Blade;
-use JsonException;
+use Illuminate\Support\Arr;
 use LogicException;
-use Throwable;
 use Tipi\Support\Locale;
-use Tipi\Support\Validation\Validator;
-use Tipi\Translations\Actions\CreateTranslation;
-use Tipi\Translations\Actions\UpdateTranslation;
-use Tipi\Translations\Contracts\LocaleProvider;
 use Tipi\Translations\Contracts\TranslatableModel;
-use Tipi\Translations\Exceptions\TranslationAlreadyExistsException;
-use Tipi\Translations\Filament\Schemas\Components\Contracts\TranslationField;
-use Tipi\Translations\Filament\Schemas\Components\TranslationContainer;
-use Tipi\Translations\Translation;
+use Tipi\Translations\Filament\Editor\RecordEditor;
+use Tipi\Translations\Filament\Enums\EditorPresentation;
+use Tipi\Translations\Filament\Exceptions\TranslationConflictException;
+use Tipi\Translations\Filament\Resources\Concerns\Translatable;
+use Tipi\Translations\Filament\TranslationEditor;
 
+/**
+ * Opens a record's translation editor: the resource's translation page, or
+ * a modal, as the editor's presentation says. Works as a table record
+ * action and as a page header action.
+ *
+ *     TranslateAction::make()
+ *     TranslateAction::make()->locale('ka')
+ *     TranslateAction::make()->editor(fn (TranslationEditor $editor) => $editor->slideOver())
+ *
+ * Hidden when the user may not translate any locale of the record.
+ */
 class TranslateAction extends Action
 {
-    protected (Model&TranslatableModel)|Closure|null $translatableRecord = null;
+    /**
+     * @var class-string<resource>|null
+     */
+    protected ?string $translationResource = null;
 
-    protected string|Closure|null $targetLocaleCode = null;
+    protected ?Closure $configureEditor = null;
 
-    protected string|Closure|null $sourceLocaleCode = null;
+    protected ?Closure $translationForm = null;
+
+    protected string|Closure|null $translationLocale = null;
 
     /**
-     * @var array<string, Closure>
+     * @var array<int, RecordEditor>
      */
-    protected array $translationSchema = [];
-
-    protected string|Closure|null $recordTitle = null;
+    protected array $recordEditors = [];
 
     public static function getDefaultName(): ?string
     {
@@ -54,621 +60,219 @@ class TranslateAction extends Action
     {
         parent::setUp();
 
+        // Filament clones actions for each record: closures use the
+        // injected action, never $this.
         $this
-            ->label(fn (): string => $this->getTranslationButtonLabel())
-            ->color('primary')
-            ->icon(fn () => $this->getTranslationButtonIcon())
-            ->tableIcon(fn () => $this->getTranslationButtonIcon())
-            ->groupedIcon(fn () => $this->getTranslationButtonIcon())
-            ->modalSubmitAction(false)
-            ->modalCancelAction(false)
-           /* ->authorize(
-                fn (): bool => Gate::allows(
-                    'translate',
-                    $this->getTranslatableRecord(),
-                ),
-            )*/
-            ->visible(fn (): bool => $this->shouldBeVisible())
-            ->modalHeading(fn (): string => $this->getModalHeading())
-            ->modalWidth(Width::SevenExtraLarge)
-            ->fillForm(fn (): array => $this->getInitialFormState())
-            ->schema(fn (): array => [
-                $this->getTranslationContainer(),
-            ]);
+            ->label(__('tipi-filament-translations::editor.action.label'))
+            ->icon(Heroicon::OutlinedLanguage)
+            ->color('gray')
+            ->authorize(fn (TranslateAction $action): bool => $action->getRecordEditor()?->canAccess() ?? false)
+            ->url(fn (TranslateAction $action, array $arguments): ?string => $action->getPageUrl($arguments['locale'] ?? null))
+            ->modalHeading(fn (TranslateAction $action): string => __('tipi-filament-translations::editor.action.heading', [
+                'record' => $action->getRecordEditor()?->recordTitle(),
+            ]))
+            ->modalWidth(fn (TranslateAction $action): Width => $action->getEditorConfig()->isComparison() ? Width::SevenExtraLarge : Width::FourExtraLarge)
+            ->slideOver(fn (TranslateAction $action): bool => $action->getEditorConfig()->getPresentation() === EditorPresentation::SlideOver)
+            ->closeModalByClickingAway(false)
+            ->stickyModalHeader()
+            ->stickyModalFooter()
+            ->modalSubmitActionLabel(__('tipi-filament-translations::editor.action.save'))
+            ->fillForm(fn (TranslateAction $action, array $arguments): array => $action->requireRecordEditor()->initialState(
+                $action->requestedLocale($arguments),
+            ))
+            ->schema(fn (TranslateAction $action): array => $action->requireRecordEditor()->components())
+            ->action(function (TranslateAction $action, array $data): void {
+                $action->saveTranslations($data);
+            });
     }
 
-    public function recordTitle(string|Closure|null $title): static
+    /**
+     * Configure the editor for this action, on top of the panel's and the
+     * resource's settings.
+     *
+     * @param  Closure(TranslationEditor): (TranslationEditor|void)  $configure
+     */
+    public function editor(Closure $configure): static
     {
-        $this->recordTitle = $title;
+        $this->configureEditor = $configure;
 
         return $this;
     }
 
-    public function translatable((Model&TranslatableModel)|Closure $record): static
+    /**
+     * The resource whose translation form and page to use. Detected from
+     * the page when the record is the resource's model.
+     *
+     * @param  class-string<resource>  $resource
+     */
+    public function resource(string $resource): static
     {
-        $this->translatableRecord = $record;
+        $this->translationResource = $resource;
 
         return $this;
     }
 
-    /** @deprecated use targetLocaleCode() */
-    public function localeCode(string|Closure|null $localeCode): static
+    /**
+     * A translation form for records outside a translatable resource.
+     *
+     * @param  Closure(Schema, Locale): Schema  $form
+     */
+    public function translationForm(Closure $form): static
     {
-        $this->targetLocaleCode = $localeCode;
+        $this->translationForm = $form;
 
         return $this;
     }
 
-    public function targetLocaleCode(string|Closure|null $localeCode): static
+    /**
+     * Open the editor at this locale.
+     */
+    public function locale(string|Closure|null $locale): static
     {
-        $this->targetLocaleCode = $localeCode;
+        $this->translationLocale = $locale;
 
         return $this;
     }
 
-    public function getTranslatableRecordTitle(): string
+    public function getEditorConfig(): TranslationEditor
     {
-        if ($title = $this->evaluate($this->recordTitle)) {
-            return $title;
+        $resource = $this->getTranslationResource();
+
+        $editor = $resource === null ? TranslationEditor::make() : $resource::getTranslationEditor();
+
+        if ($this->translationForm !== null) {
+            $editor->form($this->translationForm);
         }
 
-        $record = $this->getTranslatableRecord();
-
-        if ($record === null) {
-            throw new LogicException(
-                'Translatable record must not be null.',
-            );
+        if ($this->configureEditor !== null) {
+            $configured = $this->evaluate($this->configureEditor, ['editor' => $editor]);
+            $editor = $configured instanceof TranslationEditor ? $configured : $editor;
         }
 
-        return (string) $record->getKey();
+        return $editor;
     }
 
-    public function getTranslatableRecord(): (Model&TranslatableModel)|null
+    /**
+     * @internal
+     */
+    public function getRecordEditor(): ?RecordEditor
     {
-        $record = $this->translatableRecord !== null
-            ? $this->evaluate($this->translatableRecord)
-            : $this->getRecord();
+        $record = $this->getRecord();
+
+        if (! $record instanceof Model || ! $record instanceof TranslatableModel) {
+            return null;
+        }
+
+        return $this->recordEditors[spl_object_id($record)] ??= new RecordEditor($this->getEditorConfig(), $record);
+    }
+
+    protected function requireRecordEditor(): RecordEditor
+    {
+        return $this->getRecordEditor() ?? throw new LogicException(
+            'The translate action needs a record that implements ['.TranslatableModel::class.'].',
+        );
+    }
+
+    /**
+     * The resource of the page or table, when it is translatable and the
+     * record is its model.
+     *
+     * @return class-string<resource>|null
+     */
+    protected function getTranslationResource(): ?string
+    {
+        if ($this->translationResource !== null) {
+            return $this->translationResource;
+        }
+
+        $livewire = $this->getLivewire();
+        $resource = method_exists($livewire, 'getResource') ? $livewire::getResource() : null;
+        $record = $this->getRecord();
 
         if (
-            ! $record instanceof Model
-            || ! $record instanceof TranslatableModel
+            ! is_string($resource)
+            || ! in_array(Translatable::class, class_uses_recursive($resource), true)
+            || ($record instanceof Model && ! is_a($record, $resource::getModel()))
         ) {
             return null;
         }
 
-        /** @var Model&TranslatableModel $record */
-        return $record;
-    }
-
-    public function getTargetLocaleCode(): ?string
-    {
-        return $this->evaluate($this->targetLocaleCode)
-            ?? $this->getSelectedTargetLocaleCode();
-    }
-
-    public function getSourceLocaleCode(): ?string
-    {
-        $data = $this->getRawData();
-
-        if (array_key_exists('source_locale_code', $data)) {
-            return $data['source_locale_code'];
-        }
-
-        if ($this->sourceLocaleCode !== null) {
-            return $this->evaluate($this->sourceLocaleCode);
-        }
-
-        return $this->getDefaultSourceLocaleCode();
-    }
-
-    protected function getDefaultSourceLocaleCode(): ?string
-    {
-        $locales = $this->getSourceLocales();
-
-        $currentLocaleCode = $this->getLocaleProvider()->current()->code;
-
-        if ($locales->has($currentLocaleCode)) {
-            return $currentLocaleCode;
-        }
-
-        $defaultLocaleCode = $this->getLocaleProvider()->default()->code;
-
-        if ($locales->has($defaultLocaleCode)) {
-            return $defaultLocaleCode;
-        }
-
-        /** @var Collection<string, Locale> $locales */
-        return $locales->first()?->code;
-    }
-
-    public function getSelectedTargetLocaleCode(): ?string
-    {
-        $data = $this->getRawData();
-
-        if (array_key_exists('target_locale_code', $data)) {
-            return $data['target_locale_code'];
-        }
-
-        return $this->getSingleMissingLocaleCode();
+        return $resource;
     }
 
     /**
-     * @throws JsonException
+     * The translation page URL, or null to open the modal.
      */
-    public function hasSourceTranslation(): bool
+    protected function getPageUrl(?string $locale): ?string
     {
-        return $this->getSourceTranslation() !== null;
-    }
+        $editor = $this->getRecordEditor();
 
-    /**
-     * @throws JsonException
-     */
-    public function getSourceTranslation(): ?Translation
-    {
-        $record = $this->getTranslatableRecord();
-        $localeCode = $this->getSourceLocaleCode();
-
-        if ($record === null) {
-            throw new LogicException(
-                'Translatable record must not be null.',
-            );
-        }
-
-        if ($localeCode === null) {
+        if ($editor === null || $editor->config->getPresentation()->opensModal()) {
             return null;
         }
 
-        return $record->getTranslation($localeCode);
-    }
+        $resource = $editor->config->getResource() ?? throw new LogicException(
+            'The page presentation needs a resource that uses the ['.Translatable::class.'] concern.',
+        );
 
-    protected function hasSingleMissingLocale(): bool
-    {
-        return $this->getMissingLocales()->count() === 1;
-    }
-
-    protected function getSingleMissingLocaleCode(): ?string
-    {
-        if (! $this->hasSingleMissingLocale()) {
-            return null;
+        if (! $resource::hasPage('translations')) {
+            throw new LogicException("The resource [{$resource}] has no [translations] page. Register a TranslateRecord page in getPages(): 'translations' => TranslateWine::route('/{record}/translations').");
         }
 
-        /** @var Locale $locale */
-        $locale = $this->getMissingLocales()->first();
-
-        return $locale?->code;
-    }
-
-    protected function getSourceLocaleSelect(): Select
-    {
-        return Select::make('source_locale_code')
-            ->label('Source Language')
-            ->live()
-            ->options(
-                fn (): array => $this->getLocaleOptions($this->getSourceLocales()),
-            )
-            ->allowHtml()
-            ->searchable()
-            ->selectablePlaceholder(false)
-            ->afterStateUpdated(
-                function (Set $set, ?string $state): void {
-                    $set(
-                        'source_translation',
-                        $this->getSourceTranslationState($state),
-                    );
-                },
-            );
-    }
-
-    protected function getTargetLocaleSelect(): Select
-    {
-        return Select::make('target_locale_code')
-            ->label('Target Language')
-            ->required()
-            ->live()
-            ->options(
-                function (): array {
-                    $locales = $this->getMissingLocales();
-                    $localeCode = $this->getTargetLocaleCode();
-
-                    if ($localeCode !== null) {
-                        $locales->put($localeCode, $this->getLocaleProvider()->supportedLocale($localeCode));
-                    }
-
-                    return $this->getLocaleOptions($locales);
-                },
-            )
-            ->disabled(
-                fn (): bool => $this->hasConfiguredTargetLocale()
-                    || ($this->hasSingleMissingLocale()
-                        && $this->getTargetLocaleCode() === $this->getSingleMissingLocaleCode()),
-            )
-            ->allowHtml()
-            ->searchable()
-            ->afterStateUpdated(function (Get $get, Set $set): void {
-                $sourceLocales = $this->getSourceLocales();
-
-                if ($sourceLocales->has($get('source_locale_code'))) {
-                    return;
-                }
-
-                $sourceLocaleCode = $this->getDefaultSourceLocaleCode();
-
-                $set('source_locale_code', $sourceLocaleCode);
-                $set('source_translation', $this->getSourceTranslationState($sourceLocaleCode));
-            })
-            ->selectablePlaceholder(false);
-    }
-
-    public function getModalHeading(): string
-    {
-        $localeCode = $this->getTargetLocaleCode();
-
-        $title = $this->getTranslatableRecordTitle();
-
-        if ($localeCode === null) {
-            return "Translate $title";
-        }
-
-        $locale = $this->getLocaleProvider()->supportedLocale($localeCode);
-
-        return "Translate $title to $locale->name";
-    }
-
-    public function getModalSubmitActionLabel(): string
-    {
-        return 'Create Translation';
-    }
-
-    public function getTranslationButtonLabel(): string
-    {
-        if ($this->getTargetLocaleCode() !== null) {
-            $locale = $this->getLocaleProvider()->supportedLocale($this->getTargetLocaleCode());
-
-            return "Translate to $locale->name";
-        }
-
-        return 'Translate';
+        return $resource::getUrl('translations', array_filter([
+            'record' => $editor->record,
+            'locale' => $locale ?? $this->evaluate($this->translationLocale),
+        ]));
     }
 
     /**
-     * @throws JsonException
+     * @param  array<string, mixed>  $arguments
      */
-    public function shouldBeVisible(): bool
+    protected function requestedLocale(array $arguments): ?string
     {
-        $record = $this->getTranslatableRecord();
+        $locale = $arguments['locale'] ?? $this->evaluate($this->translationLocale);
 
-        if ($record === null) {
-            return false;
-        }
-
-        $localeCode = $this->getTargetLocaleCode();
-
-        if ($localeCode !== null) {
-            return ! $record->translationExists($localeCode);
-        }
-
-        return $this->getMissingLocales()->isNotEmpty();
+        return is_string($locale) ? $locale : null;
     }
 
     /**
-     * @throws JsonException
+     * @param  array<string, mixed>  $data
      */
-    public function getSourceTranslationSectionLabel(): ?string
+    protected function saveTranslations(array $data): void
     {
-        $locale = $this->getSourceTranslation()?->localeCode;
-
-        if ($locale === null) {
-            return null;
-        }
-
-        return $this->getLocaleProvider()->supportedLocale($locale)->name;
-    }
-
-    public function getTranslationSectionLabel(): string
-    {
-        $localeCode = $this->getTargetLocaleCode();
-
-        if ($localeCode === null) {
-            return 'Translation';
-        }
-
-        return $this->getLocaleProvider()
-            ->supportedLocale($localeCode)
-            ->name;
-    }
-
-    public function getTranslationButtonIcon(): string
-    {
-        return 'heroicon-o-language';
-    }
-
-    /**
-     * @param  array<string, Closure>  $schema
-     */
-    public function translationSchema(array $schema): static
-    {
-        $this->translationSchema = $schema;
-
-        return $this;
-    }
-
-    private function getLocaleProvider(): LocaleProvider
-    {
-        return resolve(LocaleProvider::class);
-    }
-
-    protected function getMissingLocales(): Collection
-    {
-        $record = $this->getTranslatableRecord();
-
-        if ($record === null) {
-            return collect();
-        }
-
-        return $this->getLocaleProvider()
-            ->supported()
-            ->reject(
-                fn ($locale): bool => $record->translationExists(
-                    $locale->code,
-                ),
-            );
-    }
-
-    protected function getSourceLocales(): Collection
-    {
-        $record = $this->getTranslatableRecord();
-
-        if ($record === null) {
-            return collect();
-        }
-
-        $targetLocaleCode = $this->getTargetLocaleCode();
-
-        $translatedLocaleCodes = $record
-            ->getTranslations()
-            ->pluck('localeCode');
-
-        return $this->getLocaleProvider()
-            ->supported()
-            ->filter(
-                fn (Locale $locale): bool => $translatedLocaleCodes->contains($locale->code)
-                    && $locale->code !== $targetLocaleCode,
-            );
-    }
-
-    /**
-     * @throws JsonException
-     */
-    protected function getTranslationContainer(): TranslationContainer
-    {
-        $container = TranslationContainer::make();
-
-        $container
-            ->sourceVisible(fn (): bool => $this->hasSourceTranslation())
-            ->sourceLocale([
-                $this->getSourceLocaleSelect(),
-            ])
-            ->targetLocale([
-                $this->getTargetLocaleSelect(),
-
-            ])
-            ->sourceHeader([
-                TextEntry::make('sourceHeading')
-                    ->hiddenLabel()
-                    ->state(function (Get $get): ?string {
-                        $localeCode = $get('source_locale_code');
-
-                        if ($localeCode === null) {
-                            return null;
-                        }
-
-                        return $this->getLocaleProvider()
-                            ->supportedLocale($localeCode)
-                            ->name;
-                    })
-                    ->size(TextSize::Medium),
-            ])
-            ->sourceFooter([
-                Action::make('saveSourceTranslation')
-                    ->label('Save Source')
-                    ->action(function (Get $get) use ($container): void {
-                        $attributes = $container->getSourceState();
-
-                        $localeCode = $get('source_locale_code');
-
-                        if ($localeCode === null) {
-                            return;
-                        }
-
-                        $this->updateSourceTranslation(
-                            localeCode: $localeCode,
-                            attributes: $attributes,
-                        );
-                    })
-                    ->extraAttributes([
-                        'data-translation-action' => 'source',
-                    ]),
-            ])
-            ->targetFooter([
-                Action::make('createTargetTranslation')
-                    ->label('Create Translation')
-                    ->action(function (Get $get) use ($container): void {
-                        $attributes = $container->getTargetState();
-
-                        $localeCode = $get('target_locale_code');
-
-                        if ($localeCode === null) {
-                            return;
-                        }
-
-                        $this->createTargetTranslation(
-                            localeCode: $localeCode,
-                            attributes: $attributes,
-                        );
-                    })
-                    ->extraAttributes([
-                        'data-translation-action' => 'target',
-                    ]),
-            ])
-            ->targetHeader([
-                TextEntry::make('translationHeading')
-                    ->hiddenLabel()
-                    ->state(fn (): string => $this->getTranslationSectionLabel())
-                    ->size(TextSize::Medium),
-            ]);
-
-        foreach ($this->translationSchema as $attribute => $factory) {
-            $sourceField = $factory();
-            $targetField = $factory();
-
-            if (
-                ! $sourceField instanceof TranslationField
-                || ! $targetField instanceof TranslationField
-            ) {
-                throw new LogicException(sprintf(
-                    'Translation fields must implement [%s].',
-                    TranslationField::class,
-                ));
-            }
-
-            $sourceField
-                ->hydrateTranslation(false)
-                ->hiddenLabel()
-                ->statePath("source_translation.$attribute");
-
-            $targetField
-                ->hydrateTranslation(false)
-                ->hiddenLabel()
-                ->statePath("target_translation.$attribute");
-
-            $container->content(
-                name: $attribute,
-                source: [$sourceField],
-                target: [$targetField],
-            );
-        }
-
-        return $container;
-    }
-
-    protected function getSourceTranslationState(?string $localeCode): array
-    {
-        if ($localeCode === null) {
-            return [];
-        }
-
-        return $this->getTranslatableRecord()
-            ?->getTranslation($localeCode)
-            ?->attributes ?? [];
-    }
-
-    protected function getInitialFormState(): array
-    {
-        $sourceLocaleCode = $this->getDefaultSourceLocaleCode();
-
-        return [
-            'source_locale_code' => $sourceLocaleCode,
-            'source_translation' => $this->getSourceTranslationState(
-                $sourceLocaleCode,
-            ),
-            'target_locale_code' => $this->getTargetLocaleCode()
-                ?? $this->getSingleMissingLocaleCode(),
-        ];
-    }
-
-    protected function getLocaleOptions(Collection $locales): array
-    {
-        return $locales
-            ->mapWithKeys(
-                fn (Locale $locale): array => [
-                    $locale->code => Blade::render(
-                        '<x-dynamic-component :component="$component" class="w-5 h-5 inline-block" /> {{ $name }}',
-                        [
-                            'component' => 'flag-4x3-'.strtolower(
-                                $locale->countryCode ?? 'un',
-                            ),
-                            'name' => $locale->name,
-                        ],
-                    ),
-                ],
-            )
-            ->all();
-    }
-
-    protected function hasConfiguredTargetLocale(): bool
-    {
-        return $this->evaluate($this->targetLocaleCode) !== null;
-    }
-
-    /**
-     * @throws Throwable
-     */
-    protected function createTargetTranslation(
-        string $localeCode,
-        array $attributes,
-    ): void {
-        $record = $this->getTranslatableRecord();
-
-        if ($record === null) {
-            throw new LogicException(
-                'Translatable record must not be null.',
-            );
-        }
+        $editor = $this->requireRecordEditor();
 
         try {
-            resolve(CreateTranslation::class)->execute(
-                translatable: $record,
-                attributes: $attributes,
-                localeCode: $localeCode,
-            );
-        } catch (TranslationAlreadyExistsException $exception) {
-            Validator::fail(
-                field: 'target_locale_code',
-                message: $exception->getMessage(),
-                path: 'mountedActions.0.data',
-            );
+            $changed = $editor->save($data);
+        } catch (TranslationConflictException $exception) {
+            static::sendConflictNotification($editor, $exception);
+
+            $this->halt();
         }
 
-        $locale = $this->getLocaleProvider()
-            ->supportedLocale($localeCode);
-
-        $this->getLivewire()->dispatch('translations-updated');
-
         Notification::make()
-            ->title("Translated to $locale->name")
             ->success()
+            ->title($changed === []
+                ? __('tipi-filament-translations::editor.notifications.unchanged')
+                : __('tipi-filament-translations::editor.notifications.saved'))
             ->send();
     }
 
     /**
-     * @throws Throwable
+     * @internal
      */
-    protected function updateSourceTranslation(
-        string $localeCode,
-        array $attributes,
-    ): void {
-        $record = $this->getTranslatableRecord();
-
-        if ($record === null) {
-            throw new LogicException(
-                'Translatable record must not be null.',
-            );
-        }
-
-        resolve(UpdateTranslation::class)->execute(
-            translatable: $record,
-            attributes: $attributes,
-            localeCode: $localeCode,
-        );
-
-        $locale = $this->getLocaleProvider()
-            ->supportedLocale($localeCode);
-
-        $this->getLivewire()->dispatch('translations-updated');
+    public static function sendConflictNotification(RecordEditor $editor, TranslationConflictException $exception): void
+    {
+        $locales = Arr::join(array_map(
+            fn (string $code): string => $editor->locales()->get($code)->name ?? $code,
+            $exception->locales,
+        ), ', ', ' & ');
 
         Notification::make()
-            ->title("Translated to $locale->name")
-            ->success()
+            ->danger()
+            ->persistent()
+            ->title(__('tipi-filament-translations::editor.notifications.conflict_title'))
+            ->body(__('tipi-filament-translations::editor.notifications.conflict_body', ['locales' => $locales]))
             ->send();
     }
 }

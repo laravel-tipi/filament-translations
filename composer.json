@@ -1,6 +1,6 @@
 {
   "name": "laravel-tipi/filament-translations",
-  "description": "Filament integration for laravel-tipi/translations",
+  "description": "Translation editors for Filament: side-by-side comparison or locale tabs, on a page or in a modal, for laravel-tipi/translations models.",
   "keywords": [
     "laravel",
     "filament",
@@ -19,9 +19,9 @@
   "require": {
     "php": "^8.5",
     "filament/filament": "^5.10",
-    "laravel-tipi/support": "^1.0",
-    "laravel-tipi/translations": "^0.1.20",
-    "stijnvanouplines/blade-country-flags": "^1.0.9"
+    "laravel-tipi/localization": "^0.2",
+    "laravel-tipi/support": "^1.0.12",
+    "laravel-tipi/translations": "^0.2"
   },
   "require-dev": {
     "laravel/pint": "^1.32",
