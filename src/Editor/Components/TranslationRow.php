@@ -50,7 +50,11 @@ final class TranslationRow extends Component
         $row->applyLanguage('target', $unit, $locale);
 
         $row->childComponents([
-            Group::make([$unit])->statePath(RecordEditor::TRANSLATIONS.'.'.$locale->code),
+            Group::make([$unit])
+                ->statePath(RecordEditor::TRANSLATIONS.'.'.$locale->code)
+                // Locales opened without changes are neither validated nor saved.
+                ->dehydrated(fn (Group $component): bool => $editor->isChanged($component->getRootContainer(), $locale->code))
+                ->validatedWhenNotDehydrated(false),
         ], 'target');
 
         if ($twin !== null && $source !== null) {

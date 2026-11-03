@@ -44,16 +44,18 @@ use Tipi\Translations\Filament\TranslationEditor;
  *
  *     locale         the target locale shown
  *     source_locale  the read-only source (comparison layout)
- *     loaded         locale => fingerprint of the stored values when loaded
+ *     loaded         locale => fingerprints, when loaded, of the stored values
+ *                    ("stored") and of the form state ("form")
  *     translations   locale => attribute => value, for loaded locales only
  *     source         attribute => value of the source locale
  *
  * Contract:
  * - Fields are filled with exactly what is stored for their locale, never
  *   with fallback values.
- * - Locales are loaded when first opened. Saving writes every loaded locale
- *   in one save() of the model: one transaction, unchanged values not
- *   written, other locales and the source untouched.
+ * - Locales are loaded when first opened. Saving validates and writes every
+ *   loaded locale whose fields changed, in one save() of the model: one
+ *   transaction, unchanged values not written, other locales and the source
+ *   untouched. Opening a locale only to look at it never blocks saving.
  * - A loaded locale that changed in the database since it was loaded is a
  *   conflict: nothing is saved.
  * - Locale codes and attributes in the state are never trusted: only
@@ -404,6 +406,7 @@ final class RecordEditor
                 ->selectablePlaceholder(false)
                 ->live()
                 ->dehydrated(false)
+                ->validatedWhenNotDehydrated(false)
                 ->afterStateUpdated(fn (Select $component, ?string $state, ?string $old) => $this->switchSource($component, $state, $old))
                 ->columnSpan(['default' => 'full', '@xl' => 1]);
         }
@@ -574,7 +577,7 @@ final class RecordEditor
         return [
             self::LOCALE => $locale,
             self::SOURCE_LOCALE => $source,
-            self::LOADED => $locale === null ? [] : [$locale => $this->fingerprint($locale)],
+            self::LOADED => $locale === null ? [] : [$locale => ['stored' => $this->fingerprint($locale)]],
             self::TRANSLATIONS => $locale === null ? [] : [$locale => $this->storedValues($locale)],
             self::SOURCE => $source === null ? [] : $this->storedValues($source),
         ];
@@ -607,12 +610,46 @@ final class RecordEditor
     public function loadLocale(Schema $root, string $locale): void
     {
         $loaded = $this->loaded($root->getRawState());
-        $loaded[$locale] = $this->fingerprint($locale);
+        $loaded[$locale] = ['stored' => $this->fingerprint($locale)];
 
         $root->fillPartially(
             [self::TRANSLATIONS => [$locale => $this->storedValues($locale)], self::LOADED => $loaded],
             [self::TRANSLATIONS.'.'.$locale, self::LOADED],
         );
+
+        $this->rememberFormState($root);
+    }
+
+    /**
+     * Fingerprint the hydrated form state of loaded locales, to tell which
+     * ones the editor changed. Called once their fields are filled.
+     */
+    public function rememberFormState(Schema $root): void
+    {
+        $state = $root->getRawState();
+        $loaded = $this->loaded($state);
+
+        foreach ($loaded as $locale => $fingerprints) {
+            $loaded[$locale]['form'] ??= self::formFingerprint(data_get($state, self::TRANSLATIONS.'.'.$locale));
+        }
+
+        $root->partialRawState([self::LOADED => $loaded]);
+    }
+
+    /**
+     * Whether the editor changed the fields of a loaded locale.
+     */
+    public function isChanged(Schema $root, string $locale): bool
+    {
+        $state = $root->getRawState();
+        $form = $this->loaded($state)[$locale]['form'] ?? null;
+
+        return $form === null || ! hash_equals($form, self::formFingerprint(data_get($state, self::TRANSLATIONS.'.'.$locale)));
+    }
+
+    private static function formFingerprint(mixed $state): string
+    {
+        return md5(json_encode($state, JSON_UNESCAPED_UNICODE | JSON_PRESERVE_ZERO_FRACTION) ?: '');
     }
 
     /**
@@ -679,13 +716,20 @@ final class RecordEditor
 
     /**
      * @param  array<string, mixed>|object  $state
-     * @return array<string, string>
+     * @return array<string, array{stored: string, form?: string}>
      */
     public function loaded(array|object $state): array
     {
         $loaded = data_get($state, self::LOADED);
 
-        return is_array($loaded) ? array_filter($loaded, is_string(...)) : [];
+        if (! is_array($loaded)) {
+            return [];
+        }
+
+        return array_filter(
+            $loaded,
+            fn (mixed $fingerprints): bool => is_array($fingerprints) && is_string($fingerprints['stored'] ?? null),
+        );
     }
 
     /**
@@ -721,12 +765,13 @@ final class RecordEditor
         $attributes = array_flip($this->attributes());
         $changes = [];
 
-        foreach ($this->loaded($state) as $locale => $fingerprint) {
+        foreach ($this->loaded($state) as $locale => $fingerprints) {
             $locale = (string) $locale;
+            $fingerprint = $fingerprints['stored'];
 
             $this->authorizeTranslate($locale);
 
-            // A locale that isn't shown (the source) has no dehydrated values.
+            // Unchanged locales, and the source, have no dehydrated values.
             if (! is_array($translations[$locale] ?? null)) {
                 continue;
             }

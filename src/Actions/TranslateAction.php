@@ -77,9 +77,12 @@ class TranslateAction extends Action
             ->stickyModalHeader()
             ->stickyModalFooter()
             ->modalSubmitActionLabel(__('tipi-filament-translations::editor.action.save'))
-            ->fillForm(fn (TranslateAction $action, array $arguments): array => $action->requireRecordEditor()->initialState(
-                $action->requestedLocale($arguments),
-            ))
+            ->mountUsing(function (TranslateAction $action, ?Schema $schema, array $arguments): void {
+                $editor = $action->requireRecordEditor();
+
+                $schema?->fill($editor->initialState($action->requestedLocale($arguments)));
+                $schema === null || $editor->rememberFormState($schema);
+            })
             ->schema(fn (TranslateAction $action): array => $action->requireRecordEditor()->components())
             ->action(function (TranslateAction $action, array $data): void {
                 $action->saveTranslations($data);

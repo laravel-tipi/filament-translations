@@ -111,7 +111,7 @@ it('refuses to write a locale injected into the loaded locales', function (strin
     // French is inactive and not offered.
     $editor = openEditor($presentation, $wine, 'ka')
         ->fill('ka', ['name' => 'საფერავი'])
-        ->set('loaded.fr', md5(serialize(['name' => null, 'description' => null, 'notes' => null])))
+        ->set('loaded.fr', ['stored' => md5(serialize(['name' => null, 'description' => null, 'notes' => null]))])
         ->set('translations.fr', ['name' => 'Injecté']);
 
     $editor->save()->livewire->assertForbidden();

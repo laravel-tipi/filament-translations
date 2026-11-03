@@ -84,7 +84,8 @@ it('validates every opened locale and saves nothing when one fails', function (s
     $editor = openEditor($presentation, $wine, 'ka')
         ->fill('ka', ['name' => 'ახალი'])
         ->switchTo('de')
-        ->fill('de', ['name' => null]) // required
+        // A German description without the required name.
+        ->fill('de', ['description' => '<p>Trocken</p>'])
         ->save();
 
     $editor->assertErrors(['translations.de.name'])->assertStillOpen();
@@ -92,6 +93,23 @@ it('validates every opened locale and saves nothing when one fails', function (s
     // The input is kept and nothing is written.
     expect($editor->state('translations.ka.name'))->toBe('ახალი')
         ->and($wine->fresh()->getTranslation('name', 'ka'))->toBe('საფერავი');
+})->with(editorCombinations());
+
+it('neither validates nor saves locales opened without changes', function (string $presentation, Closure $editor): void {
+    configureEditor($editor);
+
+    $wine = makeRecord(Wine::class, ['en' => ['name' => 'Saperavi']]);
+
+    // German and Arabic are only looked at; their required names stay empty.
+    openEditor($presentation, $wine, 'ka')
+        ->switchTo('de')
+        ->switchTo('ar')
+        ->switchTo('ka')
+        ->fill('ka', ['name' => 'საფერავი'])
+        ->save()
+        ->assertSaved();
+
+    expect($wine->fresh()->getTranslatedLocales())->toBe(['en', 'ka']);
 })->with(editorCombinations());
 
 it('applies locale-specific rules from the form', function (string $presentation, Closure $editor): void {

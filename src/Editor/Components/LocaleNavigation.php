@@ -33,6 +33,7 @@ final class LocaleNavigation extends Field
             ->hiddenLabel()
             ->live()
             ->dehydrated(false)
+            ->validatedWhenNotDehydrated(false)
             ->afterStateUpdated(fn (LocaleNavigation $component, ?string $state, ?string $old) => $this->editor->switchLocale($component, $state, $old));
     }
 

@@ -114,6 +114,7 @@ abstract class TranslateRecord extends Page
     protected function fillForm(): void
     {
         $this->form->fill($this->getRecordEditor()->initialState($this->activeLocale, $this->sourceLocale));
+        $this->getRecordEditor()->rememberFormState($this->form);
 
         $this->syncEditorState();
     }
@@ -142,14 +143,13 @@ abstract class TranslateRecord extends Page
     }
 
     /**
-     * Every Livewire update: keep the URL on the shown locales, remember
-     * newly loaded locales, and recompute what counts as unsaved.
+     * After every request, once Filament has applied all updates: keep the
+     * URL on the shown locales, remember newly loaded locales, and
+     * recompute what counts as unsaved.
      */
-    public function updated(string $property): void
+    public function dehydrate(): void
     {
-        if (str_starts_with($property, 'data.')) {
-            $this->syncEditorState();
-        }
+        $this->syncEditorState();
     }
 
     public function save(): void
