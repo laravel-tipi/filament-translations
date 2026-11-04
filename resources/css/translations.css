@@ -305,3 +305,24 @@
     opacity: 0.7;
     border-style: dashed;
 }
+
+.fi-tipi-tr-stale {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.25rem 0.75rem;
+    padding: 0.375rem 0.75rem;
+    border-radius: 0.5rem;
+    font-size: 0.875rem;
+    color: var(--warning-800);
+    background: var(--warning-50);
+}
+
+.fi-tipi-tr-stale p {
+    margin: 0;
+}
+
+:where(.dark) .fi-tipi-tr-stale {
+    color: var(--warning-300);
+    background: color-mix(in oklab, var(--warning-400) 10%, transparent);
+}

@@ -87,17 +87,33 @@ it('saves the target without touching the source or other locales', function (st
 it('saves drafts: completeness is reported, never required', function (string $presentation, Closure $editor, string $model): void {
     configureEditor($editor);
 
-    [$description] = twoParagraphs($model);
+    [$description, $first, $second] = twoParagraphs($model);
     $record = makeRecord($model, ['en' => ['name' => 'Saperavi', 'description' => $description]]);
 
     // The name is required() in the form; the draft leaves it out.
     openEditor($presentation, $record, 'ka')
-        ->fill('ka', [twoParagraphs($model)[1] => 'მშრალი წითელი.'])
+        ->fill('ka', [$first => 'მშრალი წითელი.'])
         ->save()
         ->assertSaved();
 
-    expect($record->fresh()->getTranslation('name', 'ka'))->toBeNull()
-        ->and($record->fresh()->getTranslation('description', 'ka'))->not->toBeNull();
+    $fresh = $record->fresh();
+
+    expect($fresh->getTranslation('name', 'ka'))->toBeNull();
+
+    if ($first === $second) {
+        // One text: translated, published.
+        expect($fresh->getTranslation('description', 'ka'))->toBe('მშრალი წითელი.');
+
+        return;
+    }
+
+    // Half a document: an unpublished draft. Readers keep the source.
+    expect($fresh->getTranslation('description', 'ka'))->toBeNull()
+        ->and($fresh->getTranslationDraft('description', 'ka'))->not->toBeNull()
+        ->and($fresh->getTranslation('description', 'ka', fallback: true))->toBe($description);
+
+    // Reopened: the draft, not a blank form.
+    expect(openEditor($presentation, $fresh, 'ka')->text('ka', $first))->toBe('მშრალი წითელი.');
 })->with(editorCombinations())->with(array_map(fn (array $storage): array => [$storage[0]], storages()));
 
 it('saves every opened locale in one save, and reopens what it saved', function (string $presentation, Closure $editor, string $model): void {

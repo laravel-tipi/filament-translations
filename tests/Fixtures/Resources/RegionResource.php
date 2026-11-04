@@ -53,7 +53,9 @@ final class RegionResource extends Resource
                 TextInput::make('name')->required(),
                 Textarea::make('description'),
             ])->columns(2),
-            Repeater::make('notes')->simple(TextInput::make('note'))->defaultItems(0),
+            // Simple items can't have ids: a fixed list.
+            Repeater::make('notes')->simple(TextInput::make('note'))->defaultItems(0)
+                ->addable(false)->deletable(false)->reorderable(false),
         ]);
     }
 

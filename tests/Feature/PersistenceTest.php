@@ -37,7 +37,7 @@ it('treats cleared texts as removed translations, so readers see the fallback', 
         ->and($wine->resolveTranslation('name', 'ka')->isFallback())->toBeTrue();
 })->with('presentations');
 
-it('stores an empty rich text block, never the source’s text, for untranslated paragraphs', function (string $presentation, Closure $editor): void {
+it('keeps a partly translated document as a draft, with empty blocks, never the source’s text', function (string $presentation, Closure $editor): void {
     configureEditor($editor);
 
     $wine = makeRecord(Wine::class, ['en' => ['description' => '<h2>Saperavi</h2><p>Dry.</p>']]);
@@ -47,7 +47,8 @@ it('stores an empty rich text block, never the source’s text, for untranslated
         ->save()
         ->assertSaved();
 
-    expect($wine->fresh()->getTranslation('description', 'ka'))->toBe('<h2>საფერავი</h2><p></p>');
+    expect($wine->fresh()->getTranslation('description', 'ka'))->toBeNull()
+        ->and($wine->fresh()->getTranslationDraft('description', 'ka'))->toBe('<h2>საფერავი</h2><p></p>');
 })->with('presentations');
 
 it('writes only the editor’s segments of offered, authorized locales', function (string $presentation, Closure $editor): void {

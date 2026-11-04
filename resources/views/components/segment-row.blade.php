@@ -68,8 +68,32 @@
             </div>
         @endif
 
+        @if ($isStale())
+            <div class="fi-tipi-tr-stale" role="status">
+                @if ($isReviewed())
+                    <p>{{ __('tipi-filament-translations::editor.row.reviewed') }}</p>
+                @else
+                    <p>{{ __('tipi-filament-translations::editor.row.stale') }}</p>
+
+                    <x-filament::link
+                        tag="button"
+                        type="button"
+                        size="sm"
+                        :icon="Heroicon::CheckBadge"
+                        x-on:click="$wire.set({{ Js::from($getReviewedStatePath()) }}, true)"
+                    >
+                        {{ __('tipi-filament-translations::editor.row.still_correct') }}
+                    </x-filament::link>
+                @endif
+            </div>
+        @endif
+
         <div class="fi-tipi-tr-row-footer">
-            @if ($isTranslated())
+            @if ($isStale())
+                <x-filament::badge size="sm" color="warning" :icon="Heroicon::Clock">
+                    {{ __('tipi-filament-translations::editor.row.outdated') }}
+                </x-filament::badge>
+            @elseif ($isTranslated())
                 <x-filament::badge size="sm" color="success" :icon="Heroicon::CheckCircle">
                     {{ __('tipi-filament-translations::editor.row.translated') }}
                 </x-filament::badge>

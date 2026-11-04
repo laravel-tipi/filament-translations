@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 use Filament\Actions\Testing\TestAction;
 use Filament\Facades\Filament;
+use Filament\Forms\Components\Builder;
+use Filament\Forms\Components\Builder\Block;
+use Filament\Forms\Components\Repeater;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\TextInput;
 use Filament\Schemas\Schema;
@@ -14,6 +17,7 @@ use Tipi\Translations\Filament\Editor\RecordEditor;
 use Tipi\Translations\Filament\Enums\EditorLayout;
 use Tipi\Translations\Filament\Enums\EditorPresentation;
 use Tipi\Translations\Filament\Enums\LocaleNavigation;
+use Tipi\Translations\Filament\Forms\Components\ItemId;
 use Tipi\Translations\Filament\Tests\Fixtures\EditorSettings;
 use Tipi\Translations\Filament\Tests\Fixtures\Models\Wine;
 use Tipi\Translations\Filament\Tests\Fixtures\Resources\WineResource;
@@ -199,13 +203,38 @@ it('checks the configured placeholders, or none', function (): void {
 });
 
 it('identifies items by the configured key', function (): void {
-    configureEditor(fn (TranslationEditor $e) => $e->page()->itemKey('uuid'));
+    configureEditor(fn (TranslationEditor $e) => $e->page()->itemKey('uuid')->form(fn (Schema $schema) => $schema->components([
+        Repeater::make('notes')->schema([ItemId::make('uuid'), TextInput::make('note')]),
+    ])));
 
     $wine = makeRecord(Wine::class, ['en' => ['notes' => [['uuid' => 'u1', 'note' => 'Cherry']]]]);
 
     openEditor('page', $wine, 'ka')->fill('ka', ['notes/u1/note' => 'ალუბალი'])->save()->assertSaved();
 
-    expect($wine->fresh()->getTranslation('notes', 'ka'))->toBe([['uuid' => 'u1', 'note' => 'ალუბალი']]);
+    // toEqual: MySQL's JSON columns reorder keys.
+    expect($wine->fresh()->getTranslation('notes', 'ka'))->toEqual([['uuid' => 'u1', 'note' => 'ალუბალი']]);
+});
+
+it('requires an id field for repeaters and builders that can change', function (Closure $field, string $message): void {
+    $wine = makeRecord(Wine::class);
+    $editor = TranslationEditor::make()->form(fn (Schema $schema) => $schema->components([$field()]));
+
+    expect(fn () => (new RecordEditor($editor, $wine))->attributes())->toThrow(LogicException::class, $message);
+})->with([
+    'repeater' => [fn () => Repeater::make('notes')->schema([TextInput::make('note')]), 'need a stable id field [id]'],
+    'only not reorderable' => [fn () => Repeater::make('notes')->schema([TextInput::make('note')])->reorderable(false), 'need a stable id field [id]'],
+    'simple repeater' => [fn () => Repeater::make('notes')->simple(TextInput::make('note')), 'a simple repeater can\'t give its items an id'],
+    'builder block' => [fn () => Builder::make('content')->blocks([
+        Block::make('quote')->schema([ItemId::make(), TextInput::make('text')]),
+        Block::make('heading')->schema([TextInput::make('text')]),
+    ]), 'block [heading]'],
+]);
+
+it('assigns ids to items with ItemId', function (): void {
+    $field = ItemId::make();
+
+    expect($field->getName())->toBe('id')
+        ->and($field->getDefaultState())->toBeString()->toHaveLength(26);
 });
 
 it('requires a form', function (): void {

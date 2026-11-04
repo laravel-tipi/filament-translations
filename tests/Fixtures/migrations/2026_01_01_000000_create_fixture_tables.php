@@ -49,4 +49,12 @@ return new class extends Migration
             $table->timestamps();
         });
     }
+
+    public function down(): void
+    {
+        Schema::dropIfExists('regions');
+        Schema::dropIfExists('grapes');
+        Schema::dropIfExists('wine_translations');
+        Schema::dropIfExists('wines');
+    }
 };

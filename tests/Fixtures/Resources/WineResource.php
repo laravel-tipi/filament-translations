@@ -7,7 +7,6 @@ namespace Tipi\Translations\Filament\Tests\Fixtures\Resources;
 use Filament\Actions\EditAction;
 use Filament\Forms\Components\Builder;
 use Filament\Forms\Components\Builder\Block;
-use Filament\Forms\Components\Hidden;
 use Filament\Forms\Components\MarkdownEditor;
 use Filament\Forms\Components\Repeater;
 use Filament\Forms\Components\RichEditor;
@@ -21,6 +20,7 @@ use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Table;
 use Tipi\Support\Locale;
 use Tipi\Translations\Filament\Actions\TranslateAction;
+use Tipi\Translations\Filament\Forms\Components\ItemId;
 use Tipi\Translations\Filament\Resources\Concerns\Translatable;
 use Tipi\Translations\Filament\Tables\Columns\TranslationsColumn;
 use Tipi\Translations\Filament\Tables\Filters\TranslationStatusFilter;
@@ -76,7 +76,7 @@ final class WineResource extends Resource
                 Repeater::make('notes')
                     ->label('Notes')
                     ->schema([
-                        Hidden::make('id'),
+                        ItemId::make(),
                         TextInput::make('note')->required(),
                         TextInput::make('score')->numeric(),
                     ])
@@ -86,14 +86,17 @@ final class WineResource extends Resource
                 ->label('Content')
                 ->blocks([
                     Block::make('heading')->label('Heading')->schema([
+                        ItemId::make(),
                         TextInput::make('text'),
                         Select::make('level')->options(['h2' => 'H2', 'h3' => 'H3']),
                     ]),
                     Block::make('quote')->label('Quote')->schema([
+                        ItemId::make(),
                         Textarea::make('text'),
                         TextInput::make('author'),
                     ]),
                     Block::make('image')->label('Image')->schema([
+                        ItemId::make(),
                         TextInput::make('url')->url(),
                     ]),
                 ]),

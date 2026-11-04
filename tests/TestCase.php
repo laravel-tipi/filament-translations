@@ -17,6 +17,7 @@ use Filament\Support\SupportServiceProvider;
 use Filament\Tables\TablesServiceProvider;
 use Filament\Widgets\WidgetsServiceProvider;
 use Illuminate\Support\Facades\Gate;
+use Illuminate\Support\Facades\Schema;
 use Livewire\LivewireServiceProvider;
 use Orchestra\Testbench\TestCase as Orchestra;
 use RyanChandler\BladeCaptureDirective\BladeCaptureDirectiveServiceProvider;
@@ -33,6 +34,7 @@ use Tipi\Translations\Filament\Tests\Fixtures\Models\Region;
 use Tipi\Translations\Filament\Tests\Fixtures\Models\User;
 use Tipi\Translations\Filament\Tests\Fixtures\Models\Wine;
 use Tipi\Translations\Filament\Tests\Fixtures\PartnersPanelProvider;
+use Tipi\Translations\Filament\Tests\Fixtures\PublicSite;
 use Tipi\Translations\Filament\Tests\Fixtures\RegionPolicy;
 use Tipi\Translations\Filament\Tests\Fixtures\WinePolicy;
 use Tipi\Translations\TranslationsServiceProvider;
@@ -83,6 +85,29 @@ abstract class TestCase extends Orchestra
         $config->set('auth.providers.users.model', User::class);
         $config->set('database.default', 'testing');
 
+        // SQLite in memory by default; TRANSLATIONS_TEST_DB=mysql|mariadb|pgsql
+        // runs on the servers of the Translations package's compose.yaml.
+        $driver = getenv('TRANSLATIONS_TEST_DB') ?: 'sqlite';
+
+        if ($driver !== 'sqlite') {
+            if (! in_array($driver, ['mysql', 'mariadb', 'pgsql'], true)) {
+                throw new \RuntimeException("Unknown test database [{$driver}].");
+            }
+
+            $config->set('database.connections.testing', [
+                'driver' => $driver,
+                'host' => getenv('TRANSLATIONS_TEST_DB_HOST') ?: '127.0.0.1',
+                'port' => getenv('TRANSLATIONS_TEST_DB_PORT') ?: ($driver === 'pgsql' ? '5432' : '3306'),
+                'database' => getenv('TRANSLATIONS_TEST_DB_DATABASE') ?: 'tipi',
+                'username' => getenv('TRANSLATIONS_TEST_DB_USERNAME') ?: ($driver === 'pgsql' ? 'postgres' : 'root'),
+                'password' => getenv('TRANSLATIONS_TEST_DB_PASSWORD') ?: '',
+                'charset' => $driver === 'pgsql' ? 'utf8' : 'utf8mb4',
+                'collation' => $driver === 'pgsql' ? null : 'utf8mb4_unicode_ci',
+                'prefix' => '',
+                'search_path' => 'public',
+            ]);
+        }
+
         $config->set('localization.locales_driver', 'database');
         $config->set('localization.contexts_driver', 'config');
         $config->set('localization.default_context', 'web');
@@ -92,8 +117,23 @@ abstract class TestCase extends Orchestra
         ]);
     }
 
+    protected function defineRoutes($router): void
+    {
+        PublicSite::routes();
+    }
+
+    /**
+     * Whether this process cleared a server database left by an earlier run.
+     */
+    private static bool $wiped = false;
+
     protected function defineDatabaseMigrations(): void
     {
+        if (! self::$wiped && $this->app['config']->get('database.connections.testing.driver') !== 'sqlite') {
+            Schema::dropAllTables();
+            self::$wiped = true;
+        }
+
         $this->loadLaravelMigrations();
         $this->loadMigrationsFrom(dirname(__DIR__).'/vendor/laravel-tipi/localization/database/migrations');
         $this->loadMigrationsFrom(dirname(__DIR__).'/vendor/laravel-tipi/translations/database/migrations');

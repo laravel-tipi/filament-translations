@@ -51,6 +51,30 @@
     },
     "scripts": {
         "test": "pest --exclude-testsuite=Browser",
+        "test:mysql": [
+            "Composer\\Config::disableProcessTimeout",
+            "@putenv TRANSLATIONS_TEST_DB=mysql",
+            "@putenv TRANSLATIONS_TEST_DB_HOST=127.0.0.1",
+            "@putenv TRANSLATIONS_TEST_DB_PORT=33061",
+            "@putenv TRANSLATIONS_TEST_DB_PASSWORD=secret",
+            "pest --exclude-testsuite=Browser"
+        ],
+        "test:mariadb": [
+            "Composer\\Config::disableProcessTimeout",
+            "@putenv TRANSLATIONS_TEST_DB=mariadb",
+            "@putenv TRANSLATIONS_TEST_DB_HOST=127.0.0.1",
+            "@putenv TRANSLATIONS_TEST_DB_PORT=33062",
+            "@putenv TRANSLATIONS_TEST_DB_PASSWORD=secret",
+            "pest --exclude-testsuite=Browser"
+        ],
+        "test:pgsql": [
+            "Composer\\Config::disableProcessTimeout",
+            "@putenv TRANSLATIONS_TEST_DB=pgsql",
+            "@putenv TRANSLATIONS_TEST_DB_HOST=127.0.0.1",
+            "@putenv TRANSLATIONS_TEST_DB_PORT=33063",
+            "@putenv TRANSLATIONS_TEST_DB_PASSWORD=secret",
+            "pest --exclude-testsuite=Browser"
+        ],
         "test:browser": "pest --testsuite=Browser",
         "format": "pint",
         "format:test": "pint --test",
@@ -78,6 +102,9 @@
         "test": "Run the unit and feature tests.",
         "test:browser": "Run the browser tests (needs: npm install && npx playwright install chromium).",
         "check": "Check formatting and run the unit and feature tests.",
-        "check:all": "Check formatting and run every test, browser tests included."
+        "check:all": "Check formatting and run every test, browser tests included.",
+        "test:pgsql": "Run the unit and feature tests on PostgreSQL (laravel-tipi/translations compose.yaml services).",
+        "test:mysql": "Run the unit and feature tests on MySQL.",
+        "test:mariadb": "Run the unit and feature tests on MariaDB."
     }
 }

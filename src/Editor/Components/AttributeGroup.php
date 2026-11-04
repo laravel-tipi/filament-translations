@@ -116,4 +116,38 @@ final class AttributeGroup extends Component
     {
         return $this->editor->fallbackLocale($this->attribute, $this->locale->code);
     }
+
+    public function getUnsupportedReason(): ?string
+    {
+        return $this->editor->content()->unsupportedReason($this->attribute);
+    }
+
+    /**
+     * When the attribute has an unpublished draft: what readers see
+     * meanwhile.
+     */
+    public function getDraftNotice(): ?string
+    {
+        $content = $this->editor->content();
+        $locale = $this->locale->code;
+
+        if ($content->draft($locale, $this->attribute) === null) {
+            return null;
+        }
+
+        if ($this->editor->record->getTranslation($this->attribute, $locale) !== null) {
+            return __('tipi-filament-translations::editor.attribute.draft_published');
+        }
+
+        $fallback = $this->getFallbackLocale();
+
+        return $fallback === null
+            ? __('tipi-filament-translations::editor.attribute.draft_nothing')
+            : __('tipi-filament-translations::editor.attribute.draft_fallback', ['locale' => $fallback->name]);
+    }
+
+    public function getStaleCount(): int
+    {
+        return count($this->editor->content()->stale($this->locale->code, $this->attribute));
+    }
 }

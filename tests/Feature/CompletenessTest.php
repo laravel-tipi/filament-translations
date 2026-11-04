@@ -3,12 +3,19 @@
 declare(strict_types=1);
 
 use Filament\Actions\Testing\TestAction;
+use Filament\Forms\Components\MarkdownEditor;
+use Filament\Forms\Components\Textarea;
+use Filament\Forms\Components\TextInput;
+use Filament\Schemas\Schema;
+use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\DB;
 use Livewire\Livewire;
 use Tipi\Localization\Actions\CreateLocale;
 use Tipi\Localization\Data\CreateLocaleData;
 use Tipi\Localization\LocaleContexts;
 use Tipi\Localization\LocaleRegistry;
+use Tipi\Translations\Concerns\HasJsonTranslations;
+use Tipi\Translations\Contracts\TranslatableModel;
 use Tipi\Translations\Filament\Editor\RecordEditor;
 use Tipi\Translations\Filament\Enums\TranslationStatus;
 use Tipi\Translations\Filament\Support\LocaleProgress;
@@ -171,14 +178,37 @@ it('marks translations outdated and up to date', function (): void {
     expect($wine->fresh()->isTranslationOutdated('ka'))->toBeFalse();
 });
 
-it('offers state actions only to models with translation states', function (): void {
-    configureEditor(fn (TranslationEditor $e) => $e->page());
+it('requires translation states for fields with several texts', function (): void {
+    $wine = makeRecord(Wine::class);
 
-    $grape = makeRecord(Grape::class, ['en' => ['name' => 'Mtsvane'], 'ka' => ['name' => 'მწვანე']]);
+    // A plain-text form works without states.
+    $plain = new class extends Model implements TranslatableModel
+    {
+        use HasJsonTranslations;
 
-    openEditor('page', $grape, 'ka')->livewire
-        ->assertActionDoesNotExist(TestAction::make('markOutdated')->schemaComponent('tipi-translation-panel-ka', schema: 'form'))
-        ->assertActionVisible(TestAction::make('deleteTranslation')->schemaComponent('tipi-translation-panel-ka', schema: 'form'));
+        protected $table = 'grapes';
+
+        public function getTranslatableAttributes(): array
+        {
+            return ['name', 'description'];
+        }
+
+        public function isTranslatableAttribute(string $attribute): bool
+        {
+            return in_array($attribute, ['name', 'description'], true);
+        }
+    };
+
+    $form = fn (string $field) => TranslationEditor::make()->form(fn (Schema $schema) => $schema->components([
+        TextInput::make('name'),
+        $field === 'markdown' ? MarkdownEditor::make('description') : Textarea::make('description'),
+    ]));
+
+    expect((new RecordEditor($form('textarea'), $plain))->attributes())->toBe(['name', 'description'])
+        ->and(fn () => (new RecordEditor($form('markdown'), $plain))->attributes())
+        ->toThrow(LogicException::class, 'HasTranslationStates');
+
+    expect((new RecordEditor($form('markdown'), $wine))->attributes())->toBe(['name', 'description']);
 });
 
 it('shows target locale badges that open the editor at that locale', function (): void {
@@ -289,4 +319,19 @@ it('ignores filter values it does not offer', function (): void {
     Livewire::test(ListWines::class)
         ->filterTable('translation_status', ['locale' => 'en', 'status' => 'missing'])
         ->assertCanSeeTableRecords([$wine]);
+});
+
+it('never reports content it can’t translate as complete', function (): void {
+    $wine = makeRecord(Wine::class, [
+        'en' => ['name' => 'Saperavi', 'notes' => [['note' => 'Cherry']]],
+        'ka' => ['name' => 'საფერავი'],
+    ]);
+
+    $progress = progressOf($wine);
+
+    // The notes have no ids: they can't be translated, and say so.
+    expect($progress->fraction())->toBe('1/1')
+        ->and($progress->status())->toBe(TranslationStatus::Incomplete)
+        ->and($progress->unsupported)->toBe(['notes'])
+        ->and($progress->summary())->toContain(__('tipi-filament-translations::editor.progress.unsupported'));
 });

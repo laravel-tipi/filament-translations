@@ -22,7 +22,7 @@ use Tipi\Translations\Filament\Tests\Fixtures\Resources\Grapes\TranslateGrape;
 use Tipi\Translations\Filament\TranslationEditor;
 
 /**
- * JSON storage without states and without a policy.
+ * JSON storage with states, without a policy.
  */
 final class GrapeResource extends Resource
 {
@@ -43,8 +43,9 @@ final class GrapeResource extends Resource
         return $schema->components([
             TextInput::make('name')->required(),
             MarkdownEditor::make('description'),
-            // Items without ids: matched by position.
-            Repeater::make('notes')->schema([TextInput::make('label')])->defaultItems(0),
+            // A fixed list without ids: matched by position.
+            Repeater::make('notes')->schema([TextInput::make('label')])->defaultItems(0)
+                ->addable(false)->deletable(false)->reorderable(false),
         ]);
     }
 

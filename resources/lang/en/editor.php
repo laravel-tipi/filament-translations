@@ -45,6 +45,21 @@ return [
         'unsupported' => 'This content can’t be translated as text here. Edit it in the content form.',
         'orphans' => '{1} 1 stored text no longer matches the source|[2,*] :count stored texts no longer match the source',
         'unsaved' => 'The source changed while you were translating, so these texts weren’t saved. Copy what you need into the new fields:',
+        'draft' => 'Draft, not published until every text is translated.',
+        'draft_published' => 'Readers see the published translation meanwhile.',
+        'draft_fallback' => 'Readers see :locale meanwhile.',
+        'draft_nothing' => 'Readers see nothing meanwhile.',
+        'stale' => '{1} 1 text was translated from a source text that changed since.|[2,*] :count texts were translated from source texts that changed since.',
+    ],
+
+    'unsupported' => [
+        'item_id_missing' => 'Item :position has no [:key]: items are matched by id, so translations can’t be kept with their items. Save the record in its form to give every item an id.',
+        'item_id_duplicate' => 'Two items have the [:key] “:id”: items are matched by id, so translations can’t be kept with their items. Give the copy a new id in the record’s form.',
+        'custom_block' => 'The custom block “:block” has text the translation editor doesn’t know about. Declare its text fields with customBlocks().',
+        'markdown' => 'The Markdown contains a :construct, which can’t be translated as text.',
+        'markdown_html' => 'The Markdown contains HTML that can’t be rewritten safely: :html',
+        'markdown_inline_html' => 'The Markdown contains inline HTML with text in its attributes: :html',
+        'json' => 'The rich text is not valid TipTap JSON.',
     ],
 
     'roles' => [
@@ -56,6 +71,8 @@ return [
         'table_cell' => 'Table cell',
         'caption' => 'Caption',
         'alt' => 'Image description',
+        'title' => 'Tooltip',
+        'block_field' => 'Block text',
     ],
 
     'row' => [
@@ -68,6 +85,10 @@ return [
         'conflict_removed' => 'They removed the text.',
         'conflict_source' => 'The source text changed while you were editing. Check your translation against it.',
         'use_theirs' => 'Use their text',
+        'outdated' => 'Outdated',
+        'stale' => 'The source text changed since this was translated. Update the translation, or confirm it is still correct.',
+        'still_correct' => 'Still correct',
+        'reviewed' => 'Confirmed as still correct: saved with the next save.',
     ],
 
     'status' => [
@@ -82,6 +103,9 @@ return [
         'not_applicable' => ':locale: nothing to translate.',
         'outdated' => 'Outdated.',
         'review' => 'Some texts no longer match the source.',
+        'stale' => '{1} 1 text is outdated.|[2,*] :count texts are outdated.',
+        'drafts' => 'Has an unpublished draft.',
+        'unsupported' => 'Some content can’t be translated here.',
         'inactive' => 'Inactive language.',
     ],
 

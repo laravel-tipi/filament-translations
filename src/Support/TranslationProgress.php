@@ -47,6 +47,9 @@ final readonly class TranslationProgress
                 total: $progress['total'],
                 hasValues: array_intersect_key($stored[$locale->code] ?? [], $attributes) !== [],
                 review: $progress['review'],
+                stale: $progress['stale'],
+                drafts: $progress['drafts'],
+                unsupported: $progress['unsupported'],
                 outdatedSince: $state?->outdated_at,
                 workflowStatus: $state?->status,
             );

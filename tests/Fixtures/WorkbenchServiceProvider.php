@@ -33,5 +33,7 @@ final class WorkbenchServiceProvider extends ServiceProvider
     {
         Gate::policy(Wine::class, WinePolicy::class);
         Gate::policy(Region::class, RegionPolicy::class);
+
+        PublicSite::routes();
     }
 }

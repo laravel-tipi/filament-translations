@@ -143,6 +143,26 @@ final class SegmentRow extends Component
         return (filled($root) ? $root.'.' : '').RecordEditor::TRANSLATIONS.'.'.$this->locale->code.'.'.$this->segment->key();
     }
 
+    /**
+     * Whether the source text changed since this text was translated.
+     */
+    public function isStale(): bool
+    {
+        return isset($this->editor->content()->stale($this->locale->code, $this->segment->attribute)[$this->segment->path]);
+    }
+
+    public function isReviewed(): bool
+    {
+        return in_array($this->segment->key(), $this->editor->reviewed($this->getRootContainer()->getRawState(), $this->locale->code), true);
+    }
+
+    public function getReviewedStatePath(): string
+    {
+        $root = $this->getRootContainer()->getStatePath();
+
+        return (filled($root) ? $root.'.' : '').RecordEditor::REVIEWED.'.'.$this->locale->code.'.'.$this->segment->key();
+    }
+
     public function isTranslated(): bool
     {
         return isset($this->editor->alignment($this->locale->code, $this->segment->attribute)->texts[$this->segment->path]);

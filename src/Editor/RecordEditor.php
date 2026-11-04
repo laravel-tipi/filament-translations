@@ -18,13 +18,16 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Validation\ValidationException;
+use LogicException;
 use Tipi\Localization\LocaleContext;
 use Tipi\Localization\LocaleRegistry;
 use Tipi\Support\Locale;
+use Tipi\Translations\Concerns\HasTranslationStates;
 use Tipi\Translations\Contracts\TranslatableModel;
 use Tipi\Translations\Filament\Content\Alignment;
 use Tipi\Translations\Filament\Content\ContentSchema;
 use Tipi\Translations\Filament\Content\InvalidTranslation;
+use Tipi\Translations\Filament\Content\Nodes\TextNode;
 use Tipi\Translations\Filament\Content\RecordContent;
 use Tipi\Translations\Filament\Content\Segment;
 use Tipi\Translations\Filament\Content\SegmentText;
@@ -85,6 +88,8 @@ final class RecordEditor
     public const string TRANSLATIONS = 'translations';
 
     public const string CONFLICTS = 'conflicts';
+
+    public const string REVIEWED = 'reviewed';
 
     public readonly LocaleContext $context;
 
@@ -416,11 +421,29 @@ final class RecordEditor
         $form = ($this->config->getForm())(Schema::make(), $locale);
         $components = $form instanceof Schema ? $form->getComponents(withActions: true, withHidden: true) : (array) $form;
 
-        return ContentSchema::fromComponents(
+        $schema = ContentSchema::fromComponents(
             $components,
             fn (string $attribute): bool => $this->record->isTranslatableAttribute($attribute),
             $this->config->getItemKey(),
+            $this->config->getCustomBlocks(),
         );
+
+        // A field with several texts can be partly translated: that work is
+        // kept as an unpublished draft, which needs translation states.
+        if (! $this->supportsStates()) {
+            foreach ($schema->attributes() as $attribute) {
+                if (! $schema->node($attribute) instanceof TextNode) {
+                    throw new LogicException(sprintf(
+                        'The translation form field [%s] has several texts, so a partial translation is saved as a draft until it is complete. Add the [%s] trait to [%s] (and run its migration).',
+                        $attribute,
+                        HasTranslationStates::class,
+                        $this->record::class,
+                    ));
+                }
+            }
+        }
+
+        return $schema;
     }
 
     /*
@@ -464,6 +487,7 @@ final class RecordEditor
         return [
             Hidden::make(self::LOADED),
             Hidden::make(self::CONFLICTS),
+            Hidden::make(self::REVIEWED),
             // Sized by the editor's width, so modals and pages behave alike.
             Grid::make(['default' => 1, '@xl' => 4])
                 ->gridContainer()
@@ -502,6 +526,7 @@ final class RecordEditor
             self::LOADED => $locale === null ? [] : [$locale => $this->entry($locale)],
             self::TRANSLATIONS => $locale === null ? [] : [$locale => $this->storedTexts($locale)],
             self::CONFLICTS => [],
+            self::REVIEWED => [],
         ];
     }
 
@@ -527,7 +552,7 @@ final class RecordEditor
      * fingerprints, the source's structure and segment fingerprints, and
      * the loaded texts.
      *
-     * @return array{stored: array<string, string>, structure: array<string, string>, segments: array<string, array{0: string, 1: string}>, base: array<string, string|null>}
+     * @return array{stored: array<string, string>, structure: array<string, array<string, string>>, segments: array<string, array{0: string, 1: string}>, base: array<string, string|null>}
      */
     public function entry(string $locale): array
     {
@@ -536,8 +561,8 @@ final class RecordEditor
         $structure = [];
 
         foreach ($this->attributes() as $attribute) {
-            $stored[$attribute] = self::fingerprint($this->record->getTranslation($attribute, $locale));
-            $structure[$attribute] = $content->isUnsupported($attribute) ? 'unsupported' : $this->schema()->skeleton($attribute, $content->sourceValue($attribute));
+            $stored[$attribute] = $this->storedFingerprint($locale, $attribute);
+            $structure[$attribute] = $this->anchors($attribute);
         }
 
         return [
@@ -551,6 +576,62 @@ final class RecordEditor
     private static function fingerprint(mixed $value): string
     {
         return md5(serialize($value));
+    }
+
+    /**
+     * The stored published value and draft of an attribute.
+     */
+    private function storedFingerprint(string $locale, string $attribute): string
+    {
+        return self::fingerprint([$this->record->getTranslation($attribute, $locale), $this->content()->draft($locale, $attribute)]);
+    }
+
+    /**
+     * What the attribute's segment paths depend on (see Node::anchors()).
+     *
+     * @return array<string, string>
+     */
+    private function anchors(string $attribute): array
+    {
+        $content = $this->content();
+
+        if ($content->isUnsupported($attribute)) {
+            return ['' => 'unsupported'];
+        }
+
+        return ['' => 'supported', ...$this->schema()->node($attribute)->anchors('', $content->sourceValue($attribute))];
+    }
+
+    /**
+     * Whether the anchors both sides have are equal: segment paths kept
+     * their meaning. Items added or removed don't matter.
+     *
+     * @param  array<string, string>  $before
+     * @param  array<string, string>  $now
+     */
+    private static function sameAnchors(array $before, array $now): bool
+    {
+        foreach (array_intersect_key($before, $now) as $path => $anchor) {
+            if ($now[$path] !== $anchor) {
+                return false;
+            }
+        }
+
+        return ($before[''] ?? null) === ($now[''] ?? null);
+    }
+
+    /**
+     * Segments the translator confirmed as still correct for their changed
+     * source text.
+     *
+     * @param  array<string, mixed>|object  $state
+     * @return list<string>
+     */
+    public function reviewed(array|object $state, string $locale): array
+    {
+        $reviewed = data_get($state, self::REVIEWED.'.'.$locale);
+
+        return is_array($reviewed) ? array_map('strval', array_keys(array_filter($reviewed))) : [];
     }
 
     /**
@@ -611,7 +692,7 @@ final class RecordEditor
 
     public function isChanged(Schema $root, string $locale): bool
     {
-        return $this->changes($root->getRawState(), $locale) !== [];
+        return $this->changes($root->getRawState(), $locale) !== [] || $this->reviewed($root->getRawState(), $locale) !== [];
     }
 
     private static function loose(mixed $text): ?string
@@ -757,6 +838,15 @@ final class RecordEditor
         $this->setConflicts($root, $locale, ['segments' => [], 'attributes' => []]);
     }
 
+    private function clearReviewed(Schema $root, string $locale): void
+    {
+        $reviewed = data_get($root->getRawState(), self::REVIEWED);
+        $reviewed = is_array($reviewed) ? $reviewed : [];
+        unset($reviewed[$locale]);
+
+        $root->partialRawState([self::REVIEWED => $reviewed]);
+    }
+
     /*
     |--------------------------------------------------------------------------
     | Saving
@@ -777,6 +867,7 @@ final class RecordEditor
         $state = $root->getRawState();
         $loaded = $this->loaded($state);
         $pending = [];
+        $reviewed = [];
         $errors = [];
 
         foreach ($loaded as $locale => $entry) {
@@ -786,7 +877,18 @@ final class RecordEditor
 
             $segments = $this->segments($locale);
 
-            foreach ($this->changes($state, $locale) as $key => $text) {
+            $changes = $this->changes($state, $locale);
+
+            // Confirmed as still correct: saved with its source fingerprint.
+            foreach ($this->reviewed($state, $locale) as $key) {
+                if (isset($segments[$key]) && ! array_key_exists($key, $changes)) {
+                    $changes[$key] = data_get($state, self::TRANSLATIONS.'.'.$locale.'.'.$key);
+                }
+
+                $reviewed[$locale][$key] = true;
+            }
+
+            foreach ($changes as $key => $text) {
                 $segment = $segments[$key] ?? null;
 
                 try {
@@ -807,7 +909,7 @@ final class RecordEditor
         }
 
         try {
-            $changed = $this->record->lockTranslationsForUpdate(fn (): array => $this->write($pending, $loaded));
+            $changed = $this->record->lockTranslationsForUpdate(fn (): array => $this->write($pending, $loaded, $reviewed));
         } catch (TranslationConflictException $exception) {
             // The record holds what is stored now: show it with the conflicts.
             $this->flush();
@@ -834,6 +936,7 @@ final class RecordEditor
             );
 
             $this->clearConflicts($root, $locale);
+            $this->clearReviewed($root, $locale);
         }
 
         return $changed;
@@ -843,14 +946,19 @@ final class RecordEditor
      * Inside the lock: merge the changes into what is stored now and set
      * them on the record, which lockTranslationsForUpdate() then saves.
      *
+     * Complete attributes are published (their draft forgotten); partly
+     * translated ones are saved as drafts, so readers keep seeing the
+     * published translation or the fallback, never gaps.
+     *
      * @param  array<string, array<string, string|null>>  $pending
      * @param  array<string, array<string, mixed>>  $loaded
+     * @param  array<string, array<string, true>>  $reviewed
      * @return list<string>
      *
      * @throws TranslationConflictException
      * @throws InvalidTranslation
      */
-    private function write(array $pending, array $loaded): array
+    private function write(array $pending, array $loaded, array $reviewed): array
     {
         // The record was read again: start from what is stored now.
         $this->flush();
@@ -873,17 +981,16 @@ final class RecordEditor
             }
 
             foreach ($byAttribute as $attribute => $attributeChanges) {
-                $source = $content->sourceValue($attribute);
-                $structure = $content->isUnsupported($attribute) ? 'unsupported' : $this->schema()->skeleton($attribute, $source);
+                $before = $entry['structure'][$attribute] ?? null;
 
-                if ($structure !== ($entry['structure'][$attribute] ?? null)) {
+                if (! is_array($before) || ! self::sameAnchors($before, $this->anchors($attribute))) {
                     $conflicts[] = ['locale' => $locale, 'attribute' => $attribute, 'key' => null, 'reason' => TranslationConflictException::STRUCTURE, 'theirs' => null];
 
                     continue;
                 }
 
                 $remote = $content->texts($locale, $attribute);
-                $changedRemotely = self::fingerprint($this->record->getTranslation($attribute, $locale)) !== ($entry['stored'][$attribute] ?? null);
+                $changedRemotely = $this->storedFingerprint($locale, $attribute) !== ($entry['stored'][$attribute] ?? null);
                 $attributeKeys = array_filter($segments, fn (Segment $segment): bool => $segment->attribute === $attribute);
                 $texts = $changedRemotely ? $remote : array_intersect_key($entry['base'], $attributeKeys);
 
@@ -923,10 +1030,11 @@ final class RecordEditor
 
             foreach ($attributes as $attribute => $texts) {
                 $byPath = [];
+                $attributeSegments = array_filter($segments, fn (Segment $segment): bool => $segment->attribute === $attribute);
 
                 foreach ($texts as $key => $text) {
-                    if (isset($segments[$key]) && is_string($text) && trim($text) !== '') {
-                        $byPath[$segments[$key]->path] = $text;
+                    if (isset($attributeSegments[$key]) && is_string($text) && trim($text) !== '') {
+                        $byPath[$attributeSegments[$key]->path] = $text;
                     }
                 }
 
@@ -939,14 +1047,86 @@ final class RecordEditor
                     throw $exception;
                 }
 
-                if (self::fingerprint($value) !== self::fingerprint($this->record->getTranslation($attribute, $locale))) {
+                $before = $this->storedFingerprint($locale, $attribute);
+                $complete = count($byPath) === count($attributeSegments);
+
+                if (! $this->supportsStates()) {
+                    // Only single texts here: translated or not.
                     $this->record->setTranslation($attribute, $locale, $value);
+                } elseif ($value === null) {
+                    // Cleared: the draft, if there is one, or else the translation.
+                    $content->draft($locale, $attribute) !== null
+                        ? $this->record->forgetTranslationDraft($attribute, $locale)
+                        : $this->record->setTranslation($attribute, $locale, null);
+                } elseif ($complete) {
+                    $this->record->setTranslation($attribute, $locale, $value)->forgetTranslationDraft($attribute, $locale);
+                } else {
+                    $this->record->setTranslationDraft($attribute, $locale, $value);
+                }
+
+                if ($this->supportsStates()) {
+                    $sources = $this->sourcesAfter($locale, $attribute, $attributeSegments, $byPath, $pending[$locale], $reviewed[$locale] ?? []);
+
+                    // Confirming texts as still correct is a change too.
+                    if (($sources ?? []) !== $content->sources($locale, $attribute)) {
+                        $changed[$locale] = true;
+                    }
+
+                    $this->record->setTranslationSource($attribute, $locale, $sources);
+                }
+
+                if ($this->recordFingerprint($locale, $attribute) !== $before) {
                     $changed[$locale] = true;
                 }
             }
         }
 
         return array_map('strval', array_keys($changed));
+    }
+
+    /**
+     * The fingerprint of the pending published value and draft.
+     */
+    private function recordFingerprint(string $locale, string $attribute): string
+    {
+        $draft = $this->supportsStates() ? ($this->record->getDirtyTranslationStates()[$locale]['drafts'] ?? []) : [];
+
+        return self::fingerprint([
+            $this->record->getTranslation($attribute, $locale),
+            array_key_exists($attribute, $draft) ? $draft[$attribute] : $this->content()->draft($locale, $attribute),
+        ]);
+    }
+
+    /**
+     * What each translated segment was made from after this save: the
+     * current source text for segments the translator wrote or confirmed;
+     * what was recorded before for the others, so a stale translation never
+     * looks current because something else was saved.
+     *
+     * @param  array<string, Segment>  $segments  the attribute's, by key
+     * @param  array<string, string>  $texts  translated texts by path
+     * @param  array<string, string|null>  $touched  changed segments by key
+     * @param  array<string, true>  $reviewed
+     * @return array<string, string>|null
+     */
+    private function sourcesAfter(string $locale, string $attribute, array $segments, array $texts, array $touched, array $reviewed): ?array
+    {
+        $before = $this->content()->sources($locale, $attribute);
+        $sources = [];
+
+        foreach ($segments as $key => $segment) {
+            if (! isset($texts[$segment->path])) {
+                continue;
+            }
+
+            if (array_key_exists($key, $touched) || isset($reviewed[$key])) {
+                $sources[$segment->path] = $segment->hash();
+            } elseif (isset($before[$segment->path])) {
+                $sources[$segment->path] = $before[$segment->path];
+            }
+        }
+
+        return $sources === [] ? null : $sources;
     }
 
     /**
@@ -1023,7 +1203,15 @@ final class RecordEditor
             throw new AuthorizationException;
         }
 
-        $this->record->forgetTranslations($locale)->save();
+        $this->record->forgetTranslations($locale);
+
+        if ($this->supportsStates()) {
+            foreach ($this->attributes() as $attribute) {
+                $this->record->forgetTranslationDraft($attribute, $locale)->setTranslationSource($attribute, $locale, null);
+            }
+        }
+
+        $this->record->save();
         $this->flush();
     }
 
@@ -1044,6 +1232,27 @@ final class RecordEditor
     public function markCurrent(string $locale): void
     {
         $this->authorizeTranslate($locale);
+
+        // Reviewed against the current source: every translated segment is
+        // current, with the fingerprint of the source text it now matches.
+        $this->record->lockTranslationsForUpdate(function () use ($locale): void {
+            $this->flush();
+            $content = $this->content();
+
+            foreach ($this->attributes() as $attribute) {
+                $texts = $content->alignment($locale, $attribute)->texts;
+                $sources = [];
+
+                foreach ($content->segments()[$attribute] ?? [] as $segment) {
+                    if (isset($texts[$segment->path])) {
+                        $sources[$segment->path] = $segment->hash();
+                    }
+                }
+
+                $this->record->setTranslationSource($attribute, $locale, $sources === [] ? null : $sources);
+            }
+        });
+
         $this->record->markTranslationCurrent($locale);
         $this->flush();
     }

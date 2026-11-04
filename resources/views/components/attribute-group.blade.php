@@ -2,7 +2,9 @@
     $progress = $getProgress();
     $orphans = $getOrphans();
     $unsaved = $getUnsavedTexts();
-    $fallback = $progress['translated'] === 0 ? $getFallbackLocale() : null;
+    $draft = $getDraftNotice();
+    $stale = $getStaleCount();
+    $fallback = $progress['translated'] === 0 && $draft === null ? $getFallbackLocale() : null;
     $source = $getSourceLocale();
     $locale = $getLocale();
 @endphp
@@ -27,10 +29,23 @@
     @if ($isUnsupported())
         <p class="fi-tipi-tr-notice" role="status">
             {{ __('tipi-filament-translations::editor.attribute.unsupported') }}
+            {{ $getUnsupportedReason() }}
         </p>
     @elseif ($progress['total'] === 0)
         <p class="fi-tipi-tr-muted">
             {{ __('tipi-filament-translations::editor.attribute.empty', ['locale' => $source->name]) }}
+        </p>
+    @endif
+
+    @if ($draft !== null)
+        <p class="fi-tipi-tr-notice fi-tipi-tr-notice-muted" role="status">
+            {{ __('tipi-filament-translations::editor.attribute.draft') }} {{ $draft }}
+        </p>
+    @endif
+
+    @if ($stale > 0)
+        <p class="fi-tipi-tr-notice" role="status">
+            {{ trans_choice('tipi-filament-translations::editor.attribute.stale', $stale, ['count' => $stale]) }}
         </p>
     @endif
 

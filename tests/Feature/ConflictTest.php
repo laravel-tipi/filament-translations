@@ -68,7 +68,8 @@ it('refuses to overwrite a text someone else saved, and keeps the translator’s
 
     // Nothing of Bob's save is written, not even the name.
     expect($wine->fresh()->getTranslation('name', 'ka'))->toBeNull()
-        ->and($wine->fresh()->getTranslation('description', 'ka'))->toBe('<p>მშრალი.</p><p></p>')
+        // Alice's half translation is a draft.
+        ->and($wine->fresh()->getTranslationDraft('description', 'ka'))->toBe('<p>მშრალი.</p><p></p>')
         // His texts are still in the form, with Alice's shown.
         ->and($bob->text('ka', 'description/0~0'))->toBe('მშრალია.')
         ->and($bob->text('ka', 'name'))->toBe('საფერავი')
@@ -79,10 +80,9 @@ it('refuses to overwrite a text someone else saved, and keeps the translator’s
     // Saving again, having seen Alice's text, keeps his.
     $bob->save()->assertSaved();
 
-    expect($wine->fresh()->getTranslations('ka'))->toMatchArray([
-        'name' => 'საფერავი',
-        'description' => '<p>მშრალია.</p><p></p>',
-    ])->and($bob->conflicts('ka')['segments'])->toBe([]);
+    expect($wine->fresh()->getTranslation('name', 'ka'))->toBe('საფერავი')
+        ->and($wine->fresh()->getTranslationDraft('description', 'ka'))->toBe('<p>მშრალია.</p><p></p>')
+        ->and($bob->conflicts('ka')['segments'])->toBe([]);
 });
 
 it('lets the translator take the other text instead', function (): void {
@@ -113,47 +113,59 @@ it('refuses a translation of a source text that changed meanwhile', function ():
 
     $bob->fill('ka', ['description/0~0' => 'მშრალი.'])->save();
 
-    expect($wine->fresh()->getTranslation('description', 'ka'))->toBeNull()
+    expect($wine->fresh()->hasTranslationDraft('description', 'ka'))->toBeFalse()
         ->and(array_values($bob->conflicts('ka')['segments'])[0]['reason'])->toBe('source')
         ->and($bob->html())->toContain('Bone dry.')->toContain(__('tipi-filament-translations::editor.row.conflict_source'));
 
     // Checked against the new source, the translation can be saved.
     $bob->save()->assertSaved();
 
-    expect($wine->fresh()->getTranslation('description', 'ka'))->toBe('<p>მშრალი.</p><p></p>');
+    expect($wine->fresh()->getTranslationDraft('description', 'ka'))->toBe('<p>მშრალი.</p><p></p>');
 });
 
-it('refuses translations of a source whose structure changed meanwhile', function (string $change): void {
+it('refuses translations of a document whose structure changed meanwhile', function (): void {
     $wine = wineWithText();
 
     $bob = openEditor('page', $wine, 'ka');
-    $bob->fill('ka', ['description/0~0' => 'მშრალი.', 'notes/a/note' => 'ალუბალი']);
+    $bob->fill('ka', ['description/1~0' => 'წითელი.', 'notes/a/note' => 'ალუბალი']);
 
-    $source = $wine->fresh();
-
-    match ($change) {
-        'paragraph added' => $source->setTranslation('description', 'en', '<p>Intro.</p><p>Dry.</p><p>Red.</p>')->save(),
-        'items reordered' => $source->setTranslation('notes', 'en', [['id' => 'b', 'note' => 'Plum'], ['id' => 'a', 'note' => 'Cherry']])->save(),
-    };
+    // A paragraph is added before the one Bob translated.
+    $wine->fresh()->setTranslation('description', 'en', '<p>Intro.</p><p>Dry.</p><p>Red.</p>')->save();
 
     $bob->save();
 
-    // Nothing is assigned to the wrong paragraph or item.
-    expect($wine->fresh()->getTranslation('description', 'ka'))->toBeNull()
-        ->and($wine->fresh()->getTranslation('notes', 'ka'))->toBeNull();
-
-    $attribute = $change === 'paragraph added' ? 'description' : 'notes';
-    $kept = $change === 'paragraph added' ? 'მშრალი.' : 'ალუბალი';
-
-    // The text that no longer fits is kept to copy from; the others stay in place.
-    expect($bob->conflicts('ka')['attributes'][$attribute])->toBe([$kept])
+    // Nothing is assigned to the wrong paragraph, and nothing else is saved.
+    expect($wine->fresh()->hasTranslationDraft('description', 'ka'))->toBeFalse()
+        ->and($wine->fresh()->hasTranslationDraft('notes', 'ka'))->toBeFalse()
+        // The text that no longer fits is kept to copy from; the others stay in place.
+        ->and($bob->conflicts('ka')['attributes']['description'])->toBe(['წითელი.'])
+        ->and($bob->text('ka', 'notes/a/note'))->toBe('ალუბალი')
         ->and($bob->html())->toContain(__('tipi-filament-translations::editor.attribute.unsaved'));
+});
 
-    if ($change === 'items reordered') {
-        // Items have ids: after reloading, the text is still at its item.
-        expect($bob->text('ka', 'description/0~0'))->toBe('მშრალი.');
-    }
-})->with(['paragraph added', 'items reordered']);
+it('keeps translations with their items when the source reorders, adds or removes items meanwhile', function (): void {
+    $wine = wineWithText();
+
+    $bob = openEditor('page', $wine, 'ka');
+    $bob->fill('ka', ['notes/a/note' => 'ალუბალი', 'notes/b/note' => 'ქლიავი']);
+
+    // Meanwhile: reordered, one added.
+    $wine->fresh()->setTranslation('notes', 'en', [
+        ['id' => 'c', 'note' => 'Oak'],
+        ['id' => 'b', 'note' => 'Plum'],
+        ['id' => 'a', 'note' => 'Cherry'],
+    ])->save();
+
+    $bob->save()->assertSaved();
+
+    // Not a conflict: items are matched by id. The new item is untranslated,
+    // so the list is a draft.
+    expect($wine->fresh()->getTranslationDraft('notes', 'ka'))->toBe([
+        ['id' => 'c', 'note' => null],
+        ['id' => 'b', 'note' => 'ქლიავი'],
+        ['id' => 'a', 'note' => 'ალუბალი'],
+    ]);
+});
 
 it('decides from what is stored when saving, not from what it loaded', function (): void {
     $wine = wineWithText();
@@ -232,8 +244,8 @@ it('keeps translation states consistent with what was saved', function (): void 
     // Meanwhile, someone marks Georgian outdated.
     $wine->fresh()->markTranslationOutdated('ka');
 
-    $bob->fill('ka', ['description/0~0' => 'მშრალი.'])->save()->assertSaved();
+    $bob->fill('ka', ['description/0~0' => 'მშრალი.', 'description/1~0' => 'წითელი.'])->save()->assertSaved();
 
-    // Saving the translation is a review of it: current again.
+    // Publishing the translation is a review of it: current again.
     expect($wine->fresh()->isTranslationOutdated('ka'))->toBeFalse();
 });
