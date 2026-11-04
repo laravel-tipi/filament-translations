@@ -76,7 +76,11 @@
             "@putenv TRANSLATIONS_TEST_DB_PASSWORD=secret",
             "pest --exclude-testsuite=Browser"
         ],
-        "test:browser": "pest --testsuite=Browser",
+        "test:browser": [
+            "Composer\\Config::disableProcessTimeout",
+            "@php vendor/bin/testbench filament:assets --ansi",
+            "pest --testsuite=Browser"
+        ],
         "format": "pint",
         "format:test": "pint --test",
         "check": [
@@ -101,7 +105,7 @@
     },
     "scripts-descriptions": {
         "test": "Run the unit and feature tests.",
-        "test:browser": "Run the browser tests (needs: npm install && npx playwright install chromium).",
+        "test:browser": "Publish Filament's assets and run the browser tests (needs: npm install && npx playwright install chromium).",
         "check": "Check formatting and run the unit and feature tests.",
         "check:all": "Check formatting and run every test, browser tests included.",
         "test:pgsql": "Run the unit and feature tests on PostgreSQL (laravel-tipi/translations compose.yaml services).",
