@@ -45,7 +45,7 @@ class WineResource extends Resource
 ## Requirements
 
 - PHP 8.5+, Laravel 13, Filament 5.10+
-- `laravel-tipi/translations` 0.2+ (with `lockTranslationsForUpdate()`, drafts and sources) and `laravel-tipi/localization` 0.2+
+- `laravel-tipi/translations` 0.3+ (with `lockTranslationsForUpdate()`, drafts and sources) and `laravel-tipi/localization` 0.2+
 - `HasTranslationStates` on models whose translation form has fields with several texts (Markdown, rich text, repeaters, builders): it holds drafts and source fingerprints
 - `ext-dom` (PHP's HTML5 parser) and `league/commonmark` 2.7+, which Laravel already requires
 

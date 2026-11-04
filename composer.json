@@ -22,7 +22,7 @@
         "filament/filament": "^5.10",
         "laravel-tipi/localization": "^0.2",
         "laravel-tipi/support": "^1.0.12",
-        "laravel-tipi/translations": "^0.2",
+        "laravel-tipi/translations": "^0.3",
         "league/commonmark": "^2.7"
     },
     "require-dev": {
