@@ -87,7 +87,8 @@ it('translates builder blocks in the modal, switching locales without losing tex
     $page = visit('/admin/wines')
         ->click('Translate')
         ->assertSee('Translate saperavi')
-        ->fill('.fi-modal-window [data-locale="ka"] '.segment('content/q/text'), 'სადაც ღვინოა, იქ სიცოცხლეა.');
+        ->fill('.fi-modal-window [data-locale="ka"] '.segment('content/q/text'), 'სადაც ღვინოა, იქ სიცოცხლეა.')
+        ->fill('.fi-modal-window [data-locale="ka"] '.segment('content/q/author'), 'ანდაზა');
 
     $page->script(clickTab('German'));
     $page->wait(1)->fill('.fi-modal-window [data-locale="de"] '.segment('name'), 'Saperawi');
@@ -99,7 +100,7 @@ it('translates builder blocks in the modal, switching locales without losing tex
 
     $wine = $wine->fresh();
 
-    expect($wine->getTranslation('content', 'ka'))->toBe([['type' => 'quote', 'data' => ['id' => 'q', 'text' => 'სადაც ღვინოა, იქ სიცოცხლეა.', 'author' => null]]])
+    expect($wine->getTranslation('content', 'ka'))->toBe([['type' => 'quote', 'data' => ['id' => 'q', 'text' => 'სადაც ღვინოა, იქ სიცოცხლეა.', 'author' => 'ანდაზა']]])
         ->and($wine->getTranslation('name', 'de'))->toBe('Saperawi');
 });
 
@@ -127,7 +128,8 @@ it('shows a conflict, keeps the translator’s text and recovers with theirs', f
         ->press('Save translations')
         ->assertSee('Translations saved');
 
-    expect($wine->fresh()->getTranslations('ka'))->toMatchArray(['name' => 'საფერავი', 'description' => '<h2>კლასიკა</h2><p></p>']);
+    expect($wine->fresh()->getTranslation('name', 'ka'))->toBe('საფერავი')
+        ->and($wine->fresh()->getTranslationDraft('description', 'ka'))->toBe('<h2>კლასიკა</h2><p></p>');
 });
 
 it('writes right-to-left languages right to left', function (): void {
@@ -138,4 +140,68 @@ it('writes right-to-left languages right to left', function (): void {
         ->assertAttribute(segment('name'), 'dir', 'rtl')
         ->assertAttribute(segment('name'), 'lang', 'ar')
         ->assertNoJavaScriptErrors();
+});
+
+it('never shows readers a partial translation, and publishes it once complete', function (): void {
+    configureEditor(fn (TranslationEditor $e) => $e->page()->comparison());
+    $wine = richWine();
+    $site = '/site/ka/wines/'.$wine->getKey();
+
+    visit('/admin/wines/'.$wine->getKey().'/translations?locale=ka')
+        ->fill(segment('name'), 'საფერავი')
+        ->fill(segment('description/0~0'), 'კლასიკა')
+        ->press('Save translations')
+        ->assertSee('Translations saved')
+        ->assertSee('Draft, not published until every text is translated.');
+
+    // Readers: the Georgian name, and the whole English description. No gaps.
+    visit($site)
+        ->assertSeeIn('#name', 'საფერავი')
+        ->assertSeeIn('#description', 'A classic')
+        ->assertSeeIn('#description', 'aged in qvevri')
+        ->assertDontSeeIn('#description', 'კლასიკა');
+
+    // The translator finishes from the draft.
+    visit('/admin/wines/'.$wine->getKey().'/translations?locale=ka')
+        ->assertValue(segment('description/0~0'), 'კლასიკა')
+        ->fill(segment('description/1~0'), '<b1>მშრალი წითელი</b1>, დავარგებული <a2>ქვევრში</a2>.')
+        ->press('Save translations')
+        ->assertSee('Translations saved');
+
+    visit($site)
+        ->assertSeeIn('#description', 'კლასიკა')
+        ->assertSeeIn('#description', 'ქვევრში')
+        ->assertDontSeeIn('#description', 'A classic')
+        ->assertPresent('#description a[href="https://example.com/qvevri"]');
+});
+
+it('flags a translation whose source changed, until it is confirmed', function (): void {
+    configureEditor(fn (TranslationEditor $e) => $e->page()->comparison());
+    $wine = makeRecord(Wine::class, ['en' => ['name' => 'Saperavi']]);
+
+    visit('/admin/wines/'.$wine->getKey().'/translations?locale=ka')
+        ->fill(segment('name'), 'საფერავი')
+        ->press('Save translations')
+        ->assertSee('Translations saved');
+
+    $wine->fresh()->setTranslation('name', 'en', 'Saperavi.')->save();
+
+    $page = visit('/admin/wines/'.$wine->getKey().'/translations?locale=ka')
+        ->assertSee('The source text changed since this was translated.')
+        ->click('Still correct')
+        ->assertSee('Confirmed as still correct')
+        ->press('Save translations')
+        ->assertSee('Translations saved');
+
+    visit('/admin/wines/'.$wine->getKey().'/translations?locale=ka')
+        ->assertDontSee('The source text changed since this was translated.')
+        ->assertNoJavaScriptErrors();
+});
+
+it('says why content can’t be translated', function (): void {
+    configureEditor(fn (TranslationEditor $e) => $e->page()->comparison());
+    $wine = makeRecord(Wine::class, ['en' => ['name' => 'Saperavi', 'notes' => [['note' => 'Cherry']]]]);
+
+    visit('/admin/wines/'.$wine->getKey().'/translations?locale=ka')
+        ->assertSee('Item 1 has no [id]');
 });

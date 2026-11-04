@@ -30,7 +30,7 @@ class WineResource extends Resource
 - [Requirements](#requirements) · [Installation](#installation)
 - [Minimal setup](#minimal-setup)
 - [The translation form](#the-translation-form): declaring content, supported fields
-- [Translating text](#translating-text): segments, tags, placeholders, items
+- [Translating text](#translating-text): segments, drafts and publishing, tags, placeholders, items, what is translated
 - [Choosing an editor](#choosing-an-editor): presentation, layout, navigation, the four combinations
 - [Panel defaults and overrides](#panel-defaults-and-overrides)
 - [Locales and contexts](#locales-and-contexts)
@@ -45,7 +45,8 @@ class WineResource extends Resource
 ## Requirements
 
 - PHP 8.5+, Laravel 13, Filament 5.10+
-- `laravel-tipi/translations` 0.2+ (with `lockTranslationsForUpdate()`) and `laravel-tipi/localization` 0.2+
+- `laravel-tipi/translations` 0.2+ (with `lockTranslationsForUpdate()`, drafts and sources) and `laravel-tipi/localization` 0.2+
+- `HasTranslationStates` on models whose translation form has fields with several texts (Markdown, rich text, repeaters, builders): it holds drafts and source fingerprints
 - `ext-dom` (PHP's HTML5 parser) and `league/commonmark` 2.7+, which Laravel already requires
 
 ## Installation
@@ -125,7 +126,7 @@ public static function translationForm(Schema $schema, ?Locale $locale = null): 
         RichEditor::make('description'),
         MarkdownEditor::make('tasting_notes'),
         Repeater::make('features')->schema([
-            Hidden::make('id'),               // a stable item id: see "Items"
+            ItemId::make(),                   // a stable item id: see "Items"
             TextInput::make('title'),
             Textarea::make('text'),
             FileUpload::make('icon'),         // not text: kept from the source
@@ -161,7 +162,23 @@ Why not derive this from the resource's `form()`? Content forms mix translatable
 
 The **source** decides what there is to translate: each text of its content is a segment. In the comparison layout each segment shows the source text beside a textarea; in the locale-focused layout above it. Segments sit under their attribute, labelled with where they are ("2 · Quote › Author", "List item").
 
-Blank means not translated. A partly translated document keeps the source's structure with untranslated blocks empty (an empty `<p>` in HTML, a zero-width space in Markdown, where a paragraph can't be empty), so it lines up with the source when reopened. Its source text is never stored in its place.
+Blank means not translated; the source's text is never stored in its place.
+
+### Drafts and publishing
+
+A field is **published** only when all of its texts are translated. Until then the translator's work is saved as an unpublished **draft** (Translations' drafts, on `HasTranslationStates`), so readers never see a half-translated document with gaps:
+
+| The translator saves… | Readers of the locale see | The editor shows |
+|---|---|---|
+| every text of a field | the translation | the translation |
+| some texts of a field that has no translation yet | the fallback (e.g. the English field, whole) | the draft, "Draft, not published" |
+| some texts of an update to a published field | the published translation, unchanged | the draft |
+| completes the draft | the new translation; the draft is gone | the translation |
+| clears every text | a draft cleared: the published translation stays; else the translation is removed | — |
+
+- The draft keeps the source's structure, with untranslated blocks empty, so it lines up with the source when reopened. It is never read as a translation: not by `$model->description`, fallback, queries, the table filter or serialization.
+- Completeness counts the draft's texts (they are real translations); readers' view counts only what is published.
+- A field with a single text (`TextInput`, `Textarea`) can't be partial: it is published or not. A form with fields of several texts (Markdown, rich text, repeaters, builders) needs `HasTranslationStates` on the model; building the editor without it throws a `LogicException`.
 
 ### Tags
 
@@ -192,19 +209,46 @@ $editor->placeholders([]);
 
 ### Items
 
-Repeater and builder items are identified by their **id** field (`id` by default, `->itemKey('uuid')` for another). With ids, translations follow their items when the source adds, removes or reorders them. Filament stores items without ids, so add one to reorderable content:
+Repeater and builder items are identified by their **id** field (`id` by default, `->itemKey('uuid')` for another), so translations follow their items when the source adds, removes or reorders them, also while someone is translating. Filament stores items without ids: add `ItemId` to the item schema of the content form **and** the translation form (and to every block of a builder):
 
 ```php
-Hidden::make('id')->default(fn (): string => (string) Str::ulid()),
+use Tipi\Translations\Filament\Forms\Components\ItemId;
+
+Repeater::make('features')->schema([ItemId::make(), TextInput::make('title')]);
 ```
 
-Items without an id are matched by position, and only while their data other than text (type, image, settings) is unchanged: a translation is never assigned to an item that changed. Reordering items that differ only in their texts can't be told apart without ids.
+`ItemId` gives new items a ULID, and items saved before one when the content form loads them; saving the record in its form fixes them all.
+
+Positions are never trusted where items can move:
+
+- A repeater or builder that can add, delete or reorder items (Filament's default) must declare the id field; building the editor without it throws a `LogicException` naming the field and the fix. A **fixed** list (`->addable(false)->deletable(false)->reorderable(false)`), and only that, is matched by position. Simple repeaters (`->simple()`) can't hold ids, so they must be fixed.
+- An item of the source without an id, or two items with the same id (a cloned item), make the field untranslatable, with the reason shown, until the content form fixes them. Nothing is guessed.
+- A stored translated item is used only when its id and its data other than text (block type, image, settings) match the source's item. Stored items without an id are shown for reference only.
+- Ids apply at every level: nested repeaters inside items are matched by their own ids.
 
 When the source's structure changed after a translation was saved (a paragraph added, an item's type changed), the texts that no longer fit are not shown in its fields: they are listed under the attribute, to copy from. Untouched, the stored translation stays as it is.
 
-### Not supported
+### What is translated, and what isn't
 
-Text inside `<pre>` and code blocks, HTML blocks in Markdown, custom rich editor blocks and non-text fields are kept from the source, not translated. `title` attributes aren't translated. Tags input, key-value and select fields can't be translated as text.
+| Content | |
+|---|---|
+| Text of paragraphs, headings, list items, quotes, table cells, captions | translated |
+| `alt` texts of images and `title` texts (tooltips) of any element, in HTML and Markdown | translated, as their own segments; untranslated ones are left empty, never copied |
+| HTML blocks in Markdown | translated with the HTML rules; a block the HTML parser would complete or reorder (its closing tag in another block) makes the field untranslatable, with the reason |
+| Inline HTML in Markdown | kept as a void tag; inline HTML with text in `title`, `alt`, `aria-label` or `placeholder` makes the field untranslatable |
+| Rich editor custom blocks | declared with `customBlocks()`: their text config keys are translated, the rest kept; a custom block with text that isn't declared makes the field untranslatable |
+| Code (`<pre>`, `<code>`, fenced and inline code), merge tags, mentions, images, embeds, links' targets | intentionally kept from the source |
+| Non-text fields inside items (select, toggle, file, number, email, URL inputs) | intentionally kept from the source |
+| Tags input, key-value, select fields as whole attributes | can't be declared: a `LogicException` |
+
+```php
+$editor->customBlocks([
+    'hero' => ['heading', 'subheading'],  // config keys holding text (dot notation for nested keys)
+    'divider' => [],                      // no text
+]);
+```
+
+A field that can't be translated is shown with its reason and counts as **incomplete**, never as complete or "nothing to translate": user-facing text is never left out of translation or completeness unnoticed.
 
 ## Choosing an editor
 
@@ -307,6 +351,7 @@ The editor's methods:
 | `sourceLocale(string\|Closure\|null $locale)` | The canonical source: what is translated, never a target. The global default locale by default; a closure receives the record. |
 | `placeholders(?array $patterns)` | The placeholders translations must keep. |
 | `itemKey(?string $key)` | The id field of repeater and builder items (`id`). |
+| `customBlocks(array $blocks)` | The text config keys of rich editor custom blocks, by block id. |
 | `form(Closure $form)` | The form, for records outside a translatable resource. |
 
 ## Locales and contexts
@@ -341,9 +386,20 @@ Completeness is measured against the source's content, segment by segment, when 
 | **Incomplete** | Some are. |
 | **Not translated** | None are. |
 | **Nothing to translate** | The source has no text. |
-| **Outdated** | Marked for review (models with translation states). Independent of completeness. |
+| **Outdated** | Translated from source texts that changed since, or marked for review. Independent of completeness. |
 
-Per attribute, the editor shows its progress and, while nothing is stored, what readers of the content context see instead ("readers see English"). Fallback is never counted as translated, and fields are never filled with fallback text.
+Per attribute, the editor shows its progress and, while nothing is published, what readers of the content context see instead ("readers see English"). Fallback is never counted as translated, and fields are never filled with fallback text.
+
+### Freshness
+
+Completeness asks whether each source text has a translation; freshness asks whether the source text changed since it was translated. When a text is saved (published or draft), its segment records a fingerprint of the source text it was translated from (Translations' `setTranslationSource()`, one 16-character hash per segment). A translated segment is **outdated** when the source text's fingerprint differs; this is derived when read and holds across requests and editing sessions.
+
+- Only text counts: link targets, images, item settings and model columns changing don't make anything outdated. Formatting changes do (they are part of the text).
+- Each segment is judged on its own: rewording one paragraph or one item flags that text only.
+- Saving other texts never refreshes an outdated one: untouched segments keep the fingerprint they had.
+- The translator updates the text, or confirms it with **Still correct** (saved with the next save), or marks the whole locale **up to date**, which records the current source for every translated text.
+- Drafts are tracked the same way. Texts translated before fingerprints existed, or outside the editor, have none and are never claimed outdated; **Mark as up to date** starts tracking them.
+- A source text that changes while someone is translating it is a save conflict (see [Concurrent editing](#concurrent-editing)).
 
 ### In the editor
 
@@ -363,12 +419,10 @@ The column eager loads `translations` (and `translationStates`), so it costs no 
 
 With `HasTranslationStates` on the model, the editor's locale menu offers:
 
-- **Mark as outdated** and **Mark as up to date**;
+- **Mark as outdated** (a manual flag, e.g. after a change of meaning that isn't in the text) and **Mark as up to date** (clears the flag and confirms every translated text against the current source);
 - **Change status**, when `translations.states.status_enum` is configured.
 
-After changing source texts in the content form, mark the translations outdated there with `$record->markOtherTranslationsOutdated($source)` (Translations).
-
-Saving a change to a locale marks it up to date, as Translations does on every save. Without states, these actions and the outdated filter aren't shown.
+Publishing a change to a locale clears its manual flag, as Translations does on every save; saving a draft doesn't. The table filter's **Outdated** finds manually flagged locales (SQL); automatic freshness is shown in the column and the editor.
 
 ## Saving
 
@@ -378,7 +432,7 @@ The editing contract, the same in every presentation and layout:
 2. **Locales load when opened.** Switching locales loads the new one and keeps unsaved texts in the others.
 3. **One save for every changed locale.** **Save** checks and writes every opened locale with changed segments, in one locked transaction. Locales only looked at are neither checked nor saved. The source, other locales and attributes outside the form are never written.
 4. **Structure from the source.** Each changed attribute is rebuilt from the source's current structure with the translated texts, and checked.
-5. **Blank means not translated.** Clearing every segment of an attribute removes its value, so readers see the fallback. The editor never stores empty strings or the source's text.
+5. **Published when complete.** A field with every text translated is published and its draft forgotten; a partly translated one is saved as a draft (see [Drafts and publishing](#drafts-and-publishing)). The editor never stores empty strings, gaps or the source's text in a published value.
 6. **Problems keep your input.** A refused text is marked at its segment with the reason; the navigation marks locales with errors.
 
 On the page, leaving with unsaved changes asks for confirmation (with the panel's `unsavedChangesAlerts()`); switching locales or the reference isn't a change.
@@ -393,10 +447,11 @@ Saving reads what is stored **now** and decides there, inside `lockTranslationsF
 |---|---|
 | different locales | both kept |
 | different fields of a locale | both kept |
-| different paragraphs, list items or repeater items of a field | both kept (merged segment by segment) |
+| different paragraphs, list items or repeater items of a field | both kept (merged segment by segment, drafts included) |
+| a translation while the author reorders, adds or removes items with ids | kept, at its item |
 | the same segment, differently | the second save is refused |
 | a translation while the author changed that segment's source text | refused |
-| a field while the author changed its source structure (added a paragraph, reordered or retyped items) | refused for that field |
+| a field while the author changed the structure of the document it is in (added a paragraph), or a fixed list, or a block's type | refused for that field |
 | anything, on a record deleted meanwhile | refused: "this record was deleted" |
 | translation states (outdated, status) | kept; saving a locale marks it up to date |
 
@@ -485,6 +540,7 @@ The stylesheet uses Filament's color variables and container queries: the compar
 
 ```bash
 composer check                                       # Pint + unit and feature tests
+composer test:pgsql                                  # also test:mysql, test:mariadb (servers: laravel-tipi/translations compose.yaml)
 npm install && npx playwright install chromium       # once, for browser tests
 composer test:browser                                # browser tests (Playwright)
 vendor/bin/testbench workbench:build && vendor/bin/testbench serve
