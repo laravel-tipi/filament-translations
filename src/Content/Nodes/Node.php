@@ -34,6 +34,16 @@ interface Node
     public function skeleton(mixed $value): string;
 
     /**
+     * What segment paths depend on, by path: the structure of each document
+     * (paths inside it are positions), of positional lists, and builder
+     * block types. A segment's path keeps its meaning while the anchors
+     * above it are unchanged.
+     *
+     * @return array<string, string>
+     */
+    public function anchors(string $path, mixed $value): array;
+
+    /**
      * Read the texts of a stored translation into $alignment, at the paths
      * of the source's segments. Texts that don't line up with the source
      * (its structure changed) are orphans.

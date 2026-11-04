@@ -13,7 +13,8 @@ namespace Tipi\Translations\Filament\Content;
 final readonly class Run
 {
     /**
-     * @param  string  $role  what the run is: paragraph, heading, list_item, quote, table_cell, caption, alt
+     * @param  string  $role  what the run is: paragraph, heading, list_item, quote, table_cell, caption, alt, title, block_field
+     * @param  string|null  $label  where it is, when the role doesn't say (a custom block's field)
      * @param  list<string|Tag>  $nodes  canonical
      * @param  array<string, TagInfo>  $tags
      */
@@ -23,6 +24,7 @@ final readonly class Run
         public array $nodes,
         public array $tags = [],
         public bool $multiline = true,
+        public ?string $label = null,
     ) {}
 
     public function hasText(): bool

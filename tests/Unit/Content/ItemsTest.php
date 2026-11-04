@@ -9,10 +9,11 @@ use Tipi\Translations\Filament\Content\Nodes\ItemsNode;
 use Tipi\Translations\Filament\Content\Nodes\Node;
 use Tipi\Translations\Filament\Content\Nodes\ObjectNode;
 use Tipi\Translations\Filament\Content\Nodes\TextNode;
+use Tipi\Translations\Filament\Content\UnsupportedContent;
 
-function features(?string $idKey = 'id'): ItemsNode
+function features(?string $idKey = 'id', bool $positional = false): ItemsNode
 {
-    return new ItemsNode(new ObjectNode([
+    return new ItemsNode(positional: $positional, item: new ObjectNode([
         'title' => new TextNode(false),
         'body' => new DocumentNode(new Markdown),
     ], ['title' => 'Title', 'body' => 'Body']), idKey: $idKey);
@@ -70,8 +71,8 @@ it('follows items by id when the source adds, removes or moves them', function (
     ]);
 });
 
-it('matches items without ids by position only while their data is unchanged', function () use ($source): void {
-    $node = features(idKey: null);
+it('matches fixed lists by position only while their data is unchanged', function () use ($source): void {
+    $node = features(idKey: null, positional: true);
     $withoutIds = array_map(fn (array $item): array => array_diff_key($item, ['id' => true]), $source);
     $translation = $node->rebuild('', $withoutIds, ['#1/title' => 'მშრალი', '#2/title' => 'წითელი']);
 
@@ -118,7 +119,58 @@ it('translates builder blocks by type and keeps undeclared blocks whole', functi
 });
 
 it('translates simple repeaters item by item', function (): void {
-    $node = new ItemsNode(new TextNode(false), idKey: null);
+    $node = new ItemsNode(new TextNode(false), idKey: null, positional: true);
 
     expect($node->rebuild('', ['Dry', 'Red'], ['#2' => 'წითელი']))->toBe([null, 'წითელი']);
+});
+
+it('refuses lists whose items can’t be told apart', function (array $items, string $reason): void {
+    try {
+        features()->segments('features', '', [], $items);
+        $this->fail('No exception');
+    } catch (UnsupportedContent $exception) {
+        expect($exception->reason)->toBe($reason);
+    }
+})->with([
+    'an item without an id' => [[['id' => 'a', 'title' => 'A'], ['title' => 'B']], 'item_id_missing'],
+    'an empty id' => [[['id' => '', 'title' => 'A']], 'item_id_missing'],
+    'two items with one id' => [[['id' => 'a', 'title' => 'A'], ['id' => 'a', 'title' => 'B']], 'item_id_duplicate'],
+]);
+
+it('never matches stored items without an id', function () use ($source): void {
+    $alignment = align(features(), $source, [['title' => 'მშრალი', 'icon' => 'sun.svg'], ['id' => 'b', 'title' => 'წითელი', 'icon' => 'grape.svg']]);
+
+    expect($alignment->texts)->toBe(['b/title' => 'წითელი'])->and($alignment->orphans)->toBe(['მშრალი']);
+});
+
+it('follows nested items by their ids', function (): void {
+    $node = new ItemsNode(new ObjectNode([
+        'title' => new TextNode(false),
+        'steps' => new ItemsNode(new ObjectNode(['text' => new TextNode])),
+    ]));
+
+    $source = [['id' => 'a', 'title' => 'Harvest', 'steps' => [['id' => 's1', 'text' => 'Pick'], ['id' => 's2', 'text' => 'Sort']]]];
+    $translation = $node->rebuild('', $source, ['a/title' => 'რთველი', 'a/steps/s2/text' => 'დახარისხება']);
+
+    // The author swaps the steps.
+    $source[0]['steps'] = array_reverse($source[0]['steps']);
+
+    expect(align($node, $source, $translation)->texts)->toBe(['a/title' => 'რთველი', 'a/steps/s2/text' => 'დახარისხება'])
+        ->and($node->rebuild('', $source, align($node, $source, $translation)->texts)[0]['steps'])->toBe([
+            ['id' => 's2', 'text' => 'დახარისხება'],
+            ['id' => 's1', 'text' => null],
+        ]);
+});
+
+it('anchors paths to documents and block types, not to item order', function () use ($source): void {
+    $node = features();
+    $reordered = array_reverse($source);
+
+    expect($node->anchors('', $reordered))->toEqual($node->anchors('', $source));
+
+    $changed = $source;
+    $changed[0]['body'] = "New first paragraph.\n\nVery **dry**.";
+
+    expect($node->anchors('', $changed)['a/body'])->not->toBe($node->anchors('', $source)['a/body'])
+        ->and($node->anchors('', $changed)['b/body'])->toBe($node->anchors('', $source)['b/body']);
 });

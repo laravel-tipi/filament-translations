@@ -42,12 +42,12 @@ final readonly class DocumentNode implements Node
                 $segments[] = new Segment(
                     $attribute,
                     Alignment::join($path, $run->path),
-                    $context,
+                    $run->label === null ? $context : [...$context, $run->label],
                     $run->role,
                     $run->text(),
                     $run->tags,
                     $run->multiline,
-                    rich: $run->role !== 'alt',
+                    rich: $run->tags !== [] || ! in_array($run->role, ['alt', 'title', 'block_field'], true),
                 );
             }
         }
@@ -58,6 +58,11 @@ final readonly class DocumentNode implements Node
     public function skeleton(mixed $value): string
     {
         return $this->format->read($value)?->skeleton() ?? 'empty';
+    }
+
+    public function anchors(string $path, mixed $value): array
+    {
+        return [$path => $this->skeleton($value)];
     }
 
     public function align(string $path, mixed $source, mixed $target, Alignment $alignment): void
@@ -146,8 +151,8 @@ final readonly class DocumentNode implements Node
             return null;
         }
 
-        if ($run->role === 'alt') {
-            return [trim((string) preg_replace('/\s+/u', ' ', $text))];
+        if (in_array($run->role, ['alt', 'title', 'block_field'], true)) {
+            return [$run->role === 'block_field' ? trim(str_replace(["\r\n", "\r"], "\n", $text)) : trim((string) preg_replace('/\s+/u', ' ', $text))];
         }
 
         try {

@@ -34,6 +34,11 @@ final readonly class TextNode implements Node
         return 'text';
     }
 
+    public function anchors(string $path, mixed $value): array
+    {
+        return [];
+    }
+
     public function align(string $path, mixed $source, mixed $target, Alignment $alignment): void
     {
         $text = self::text($target);

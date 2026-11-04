@@ -53,9 +53,11 @@ final readonly class ContentSchema
     /**
      * @param  array<mixed>  $components
      * @param  callable(string): bool  $isTranslatable
+     * @param  array<string, list<string>>  $customBlocks  rich editor custom block id => translatable config keys
      */
-    public static function fromComponents(array $components, callable $isTranslatable, ?string $idKey = 'id'): self
+    public static function fromComponents(array $components, callable $isTranslatable, ?string $idKey = 'id', array $customBlocks = []): self
     {
+
         $fields = [];
         $labels = [];
 
@@ -70,7 +72,7 @@ final readonly class ContentSchema
                 throw new LogicException("The translation form field [{$path}] is not a translatable attribute.");
             }
 
-            $node = self::nodeFor($field, $idKey, nested: false);
+            $node = self::nodeFor($field, $idKey, $customBlocks, nested: false);
 
             if ($node === null) {
                 throw new LogicException(sprintf(
@@ -184,35 +186,55 @@ final readonly class ContentSchema
     /**
      * Inside items, inputs for numbers, emails, URLs and such are data,
      * not text: they are kept from the source.
+     *
+     * @param  array<string, list<string>>  $blocks  rich editor custom blocks
      */
-    private static function nodeFor(Field $field, ?string $idKey, bool $nested = true): ?Node
+    private static function nodeFor(Field $field, ?string $idKey, array $blocks, bool $nested = true): ?Node
     {
         return match (true) {
             $field instanceof TextInput => ! $nested || in_array($field->getType(), ['text', 'search'], true) ? new TextNode(false, self::length($field)) : null,
             $field instanceof Textarea => new TextNode(true, self::length($field)),
             $field instanceof MarkdownEditor => new DocumentNode(new Markdown),
-            $field instanceof RichEditor => new DocumentNode(new RichText(fn () => $field->getTipTapEditor())),
-            $field instanceof Repeater => self::repeater($field, $idKey),
-            $field instanceof Builder => self::builder($field, $idKey),
+            $field instanceof RichEditor => new DocumentNode(new RichText(fn () => $field->getTipTapEditor(), $blocks)),
+            $field instanceof Repeater => self::repeater($field, $idKey, $blocks),
+            $field instanceof Builder => self::builder($field, $idKey, $blocks),
             default => null,
         };
     }
 
-    private static function repeater(Repeater $repeater, ?string $idKey): Node
+    /**
+     * @param  array<string, list<string>>  $blocks
+     */
+    private static function repeater(Repeater $repeater, ?string $idKey, array $blocks): Node
     {
+        $fixed = self::isFixed($repeater);
         $simple = $repeater->getSimpleField();
 
         if ($simple !== null) {
-            return new ItemsNode(self::nodeFor($simple, $idKey) ?? new ObjectNode([]), idKey: null);
+            // Simple items are plain values: they can't carry an id.
+            if (! $fixed) {
+                throw self::identityError($repeater, 'a simple repeater can\'t give its items an id: use ->schema([ItemId::make(), …]) instead of ->simple(), or make it fixed with ->addable(false)->deletable(false)->reorderable(false)');
+            }
+
+            return new ItemsNode(self::nodeFor($simple, $idKey, $blocks) ?? new ObjectNode([]), idKey: null, positional: true);
         }
 
         $children = $repeater->getDefaultChildComponents();
+        $children = is_array($children) ? $children : [];
 
-        return new ItemsNode(self::itemNode(is_array($children) ? $children : [], $idKey), idKey: $idKey);
+        if (! $fixed) {
+            self::requireIdField($repeater, $children, $idKey);
+        }
+
+        return new ItemsNode(self::itemNode($children, $idKey, $blocks), idKey: $idKey, positional: $fixed);
     }
 
-    private static function builder(Builder $builder, ?string $idKey): Node
+    /**
+     * @param  array<string, list<string>>  $customBlocks
+     */
+    private static function builder(Builder $builder, ?string $idKey, array $customBlocks): Node
     {
+        $fixed = self::isFixed($builder);
         $blocks = [];
         $labels = [];
 
@@ -226,7 +248,13 @@ final readonly class ContentSchema
 
             $name = $block->getName();
             $children = $block->getDefaultChildComponents();
-            $blocks[$name] = self::itemNode(is_array($children) ? $children : [], $idKey);
+            $children = is_array($children) ? $children : [];
+
+            if (! $fixed) {
+                self::requireIdField($builder, $children, $idKey, $name);
+            }
+
+            $blocks[$name] = self::itemNode($children, $idKey, $customBlocks);
 
             try {
                 $labels[$name] = strip_tags((string) $block->getLabel());
@@ -235,15 +263,55 @@ final readonly class ContentSchema
             }
         }
 
-        return new ItemsNode(blocks: $blocks, blockLabels: $labels, idKey: $idKey);
+        return new ItemsNode(blocks: $blocks, blockLabels: $labels, idKey: $idKey, positional: $fixed);
+    }
+
+    /**
+     * Whether items can't be added, deleted or reordered: then positions
+     * identify them. Read from the field's settings; a setting given as a
+     * closure counts as "can".
+     */
+    private static function isFixed(Repeater|Builder $field): bool
+    {
+        $settings = (fn (): array => [$this->isAddable, $this->isDeletable, $this->isReorderable])->call($field);
+
+        return ! in_array(true, array_map(fn (mixed $setting): bool => $setting !== false, $settings), true);
+    }
+
+    /**
+     * @param  array<mixed>  $children
+     */
+    private static function requireIdField(Repeater|Builder $field, array $children, ?string $idKey, ?string $block = null): void
+    {
+        $fields = [];
+        $labels = [];
+        self::collect($children, '', $fields, $labels);
+
+        if ($idKey !== null && isset($fields[$idKey])) {
+            return;
+        }
+
+        throw self::identityError($field, sprintf(
+            'its items%s need a stable id field [%s] to keep translations with their items when items are added, deleted or reordered: add ItemId::make(%s) to the item schema of the content form and the translation form, or make the %s fixed with ->addable(false)->deletable(false)->reorderable(false)',
+            $block === null ? '' : " (block [{$block}])",
+            (string) $idKey,
+            $idKey === null || $idKey === 'id' ? '' : "'{$idKey}'",
+            $field instanceof Builder ? 'builder' : 'repeater',
+        ));
+    }
+
+    private static function identityError(Repeater|Builder $field, string $reason): LogicException
+    {
+        return new LogicException(sprintf('The translation form field [%s] can\'t be translated safely: %s.', $field->getName(), $reason));
     }
 
     /**
      * An item's text fields; its other fields are kept from the source.
      *
      * @param  array<mixed>  $components
+     * @param  array<string, list<string>>  $blocks
      */
-    private static function itemNode(array $components, ?string $idKey): ObjectNode
+    private static function itemNode(array $components, ?string $idKey, array $blocks): ObjectNode
     {
         $fields = [];
         $labels = [];
@@ -252,7 +320,7 @@ final readonly class ContentSchema
         $nodes = [];
 
         foreach ($fields as $path => $field) {
-            $node = self::nodeFor($field, $idKey);
+            $node = self::nodeFor($field, $idKey, $blocks);
 
             if ($node !== null) {
                 $nodes[$path] = $node;

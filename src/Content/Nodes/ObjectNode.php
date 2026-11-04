@@ -49,9 +49,35 @@ final readonly class ObjectNode implements Node
         // The data other than declared fields; those check their own
         // structure when they are aligned.
         $structure = array_diff_key($value, $this->fields);
-        ksort($structure);
 
-        return md5(json_encode($structure, JSON_THROW_ON_ERROR));
+        return md5(json_encode(self::sorted($structure), JSON_THROW_ON_ERROR));
+    }
+
+    /**
+     * Keys sorted at every level: databases may reorder JSON keys.
+     */
+    private static function sorted(mixed $value): mixed
+    {
+        if (! is_array($value)) {
+            return $value;
+        }
+
+        if (! array_is_list($value)) {
+            ksort($value);
+        }
+
+        return array_map(self::sorted(...), $value);
+    }
+
+    public function anchors(string $path, mixed $value): array
+    {
+        $anchors = [];
+
+        foreach ($this->fields as $name => $node) {
+            $anchors += $node->anchors(Alignment::join($path, (string) $name), is_array($value) ? ($value[$name] ?? null) : null);
+        }
+
+        return $anchors;
     }
 
     public function align(string $path, mixed $source, mixed $target, Alignment $alignment): void

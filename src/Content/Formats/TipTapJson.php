@@ -18,7 +18,10 @@ use Tiptap\Editor;
  */
 final readonly class TipTapJson implements Format
 {
-    public function __construct(private Editor $editor) {}
+    /**
+     * @param  array<string, list<string>>  $customBlocks
+     */
+    public function __construct(private Editor $editor, private array $customBlocks = []) {}
 
     public function read(mixed $value): ?Document
     {
@@ -26,7 +29,7 @@ final readonly class TipTapJson implements Format
             try {
                 $value = json_decode($value, true, flags: JSON_THROW_ON_ERROR);
             } catch (JsonException) {
-                throw new UnsupportedContent('The rich text is not valid TipTap JSON.');
+                throw new UnsupportedContent('json');
             }
         }
 
@@ -34,7 +37,7 @@ final readonly class TipTapJson implements Format
             return null;
         }
 
-        $document = (new Html)->read($this->editor->setContent($value)->getHTML());
+        $document = (new Html($this->customBlocks))->read($this->editor->setContent($value)->getHTML());
 
         return $document === null ? null : new TipTapDocument($document, $this->editor);
     }

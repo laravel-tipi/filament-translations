@@ -9,11 +9,13 @@ use Dom\Element;
 use Dom\HTMLDocument as DomDocument;
 use Dom\Node;
 use Dom\Text;
+use Illuminate\Support\Str;
 use Tipi\Translations\Filament\Content\Document;
 use Tipi\Translations\Filament\Content\Inline;
 use Tipi\Translations\Filament\Content\Run;
 use Tipi\Translations\Filament\Content\Tag;
 use Tipi\Translations\Filament\Content\TagInfo;
+use Tipi\Translations\Filament\Content\UnsupportedContent;
 
 /**
  * A parsed HTML document. Reading and rebuilding walk the tree with the
@@ -57,9 +59,10 @@ final class HtmlDocument implements Document
     private const array OPAQUE = ['pre', 'hr', 'head', 'meta', 'link'];
 
     /**
-     * Marks images while rebuilding, to give them their translated alt.
+     * Marks elements with texts in attributes (alt, title) and custom
+     * blocks, numbered in document order, while reading and rebuilding.
      */
-    private const string IMAGE = 'data-tipi-image';
+    private const string MARK = 'data-tipi-text';
 
     /**
      * @var array<string, Run>
@@ -71,38 +74,53 @@ final class HtmlDocument implements Document
     private bool $hasContent = false;
 
     /**
-     * Images seen by the walk in progress.
+     * @param  array<string, list<string>>  $customBlocks  custom block id => its translatable config keys
+     *
+     * @throws UnsupportedContent
      */
-    private int $images = 0;
-
-    /**
-     * Whether the walk in progress rebuilds (marks images) or reads.
-     */
-    private bool $rebuilding = false;
-
-    public function __construct(private readonly string $html)
-    {
+    public function __construct(
+        private readonly string $html,
+        private readonly array $customBlocks = [],
+    ) {
         [$body] = self::parse($html);
 
-        $structure = $this->walk($body, '', function (array $nodes, string $path, Element $block): array {
+        $marks = $this->mark($body);
+        $placed = [];
+
+        // Texts in attributes come right after the text around them.
+        $place = function (array $nodes) use ($marks, &$placed): void {
+            foreach (self::marksWithin($nodes) as $index) {
+                if (! isset($placed[$index])) {
+                    $placed[$index] = true;
+                    $this->runs += $marks[$index];
+                }
+            }
+        };
+
+        $structure = $this->walk($body, '', function (array $nodes, string $path, Element $block) use ($place): array {
             $tags = [];
             $elements = [];
             $counter = 0;
-            $alts = [];
-            $tree = Inline::canonical($this->tree($nodes, $tags, $elements, $counter, $alts));
+            $tree = Inline::canonical($this->tree($nodes, $tags, $elements, $counter));
 
             $run = new Run($path, self::role($block), $tree, $tags);
             $this->runs[$path] = $run;
-            // Image descriptions come after the text around their images.
-            $this->runs += $alts;
+            $place($nodes);
             $this->hasContent = $this->hasContent || $run->hasText() || Inline::voids($tree) !== [];
 
             $voids = array_map(fn (Tag $tag): string => $tags[$tag->name]->signature, Inline::voids($tree));
             sort($voids);
 
             return $voids;
-        });
+        }, $place);
 
+        foreach ($marks as $index => $runs) {
+            if (! isset($placed[$index])) {
+                $this->runs += $runs;
+            }
+        }
+
+        $this->hasContent = $this->hasContent || array_filter($marks) !== [];
         $this->skeleton = md5(json_encode($structure, JSON_THROW_ON_ERROR));
     }
 
@@ -125,50 +143,213 @@ final class HtmlDocument implements Document
     {
         [$body, $document] = self::parse($this->html);
 
-        $this->images = 0;
-        $this->rebuilding = true;
+        $this->mark($body);
 
-        try {
-            $this->walk($body, '', function (array $nodes, string $path) use ($trees, $document): array {
-                $tags = [];
-                $elements = [];
-                $counter = 0;
-                $alts = [];
-                $this->tree($nodes, $tags, $elements, $counter, $alts);
+        $this->walk($body, '', function (array $nodes, string $path) use ($trees, $document): array {
+            $tags = [];
+            $elements = [];
+            $counter = 0;
+            $this->tree($nodes, $tags, $elements, $counter);
 
-                $run = $this->runs[$path];
+            $run = $this->runs[$path];
 
-                if (! $run->hasText() || $nodes === []) {
-                    return [];
-                }
-
-                $tree = $trees[$path] ?? null;
-                $tree = $tree === null || $tree === [] ? Inline::voids($run->nodes) : $tree;
-
-                $parent = $nodes[0]->parentNode;
-                $reference = $nodes[array_key_last($nodes)]->nextSibling;
-
-                foreach ($nodes as $node) {
-                    $node->remove();
-                }
-
-                foreach (self::build($tree, $elements, $document) as $new) {
-                    $parent?->insertBefore($new, $reference);
-                }
-
+            if (! $run->hasText() || $nodes === []) {
                 return [];
-            });
-        } finally {
-            $this->rebuilding = false;
-        }
+            }
 
-        foreach ($body->querySelectorAll('['.self::IMAGE.']') as $image) {
-            $alt = $trees['img'.$image->getAttribute(self::IMAGE)] ?? null;
-            $image->setAttribute('alt', $alt === null ? '' : trim(Inline::plain($alt)));
-            $image->removeAttribute(self::IMAGE);
+            $tree = $trees[$path] ?? null;
+            $tree = $tree === null || $tree === [] ? Inline::voids($run->nodes) : $tree;
+
+            $parent = $nodes[0]->parentNode;
+            $reference = $nodes[array_key_last($nodes)]->nextSibling;
+
+            foreach ($nodes as $node) {
+                $node->remove();
+            }
+
+            foreach (self::build($tree, $elements, $document) as $new) {
+                $parent?->insertBefore($new, $reference);
+            }
+
+            return [];
+        }, fn () => null);
+
+        // Marked elements, wherever their tags moved: their texts.
+        foreach (iterator_to_array($body->querySelectorAll('['.self::MARK.']')) as $element) {
+            $index = $element->getAttribute(self::MARK);
+            $text = fn (string $path): ?string => isset($trees[$path]) ? trim(Inline::plain($trees[$path])) : null;
+
+            if (isset($this->runs['alt'.$index])) {
+                $element->setAttribute('alt', $text('alt'.$index) ?? '');
+            }
+
+            if (isset($this->runs['title'.$index])) {
+                $element->setAttribute('title', $text('title'.$index) ?? '');
+            }
+
+            if (self::isCustomBlock($element)) {
+                $config = self::config($element);
+
+                foreach ($this->runs as $path => $run) {
+                    if (str_starts_with((string) $path, "block{$index}.")) {
+                        data_set($config, substr((string) $path, strlen("block{$index}.")), $text((string) $path));
+                    }
+                }
+
+                $element->setAttribute('data-config', json_encode($config, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR));
+            }
+
+            $element->removeAttribute(self::MARK);
         }
 
         return $body->innerHTML;
+    }
+
+    /**
+     * Number the elements with texts in attributes and the custom blocks,
+     * in document order, and read their texts: index => runs.
+     *
+     * @return array<int, array<string, Run>>
+     *
+     * @throws UnsupportedContent
+     */
+    private function mark(Element $body): array
+    {
+        $marks = [];
+        $index = 0;
+
+        foreach (iterator_to_array($body->getElementsByTagName('*')) as $element) {
+            if (self::insideOpaque($element) || (self::isOpaque($element) && ! self::isCustomBlock($element))) {
+                continue;
+            }
+
+            $runs = [];
+
+            if ($element->localName === 'img' && ($alt = self::text($element->getAttribute('alt'))) !== null) {
+                $runs['alt'.$index] = new Run('alt'.$index, 'alt', [$alt], multiline: false);
+            }
+
+            if (($title = self::text($element->getAttribute('title'))) !== null) {
+                $runs['title'.$index] = new Run('title'.$index, 'title', [$title], multiline: false);
+            }
+
+            if (self::isCustomBlock($element)) {
+                $runs += $this->blockRuns($element, $index);
+            }
+
+            // Every image and titled element is numbered, with text or not,
+            // so numbers stay the same when translations leave texts empty.
+            if ($element->localName === 'img' || $element->hasAttribute('title') || self::isCustomBlock($element)) {
+                $element->setAttribute(self::MARK, (string) $index);
+                $marks[$index++] = $runs;
+            }
+        }
+
+        return $marks;
+    }
+
+    /**
+     * The texts of a custom block's config, as declared for its id. A
+     * block with text whose keys aren't declared can't be translated.
+     *
+     * @return array<string, Run>
+     *
+     * @throws UnsupportedContent
+     */
+    private function blockRuns(Element $block, int $index): array
+    {
+        $id = (string) $block->getAttribute('data-id');
+        $config = self::config($block);
+        $keys = $this->customBlocks[$id] ?? null;
+
+        if ($keys === null) {
+            if (self::hasStrings($config)) {
+                throw new UnsupportedContent('custom_block', ['block' => $id]);
+            }
+
+            return [];
+        }
+
+        $label = (string) ($block->getAttribute('data-label') ?: Str::headline($id));
+        $runs = [];
+
+        foreach ($keys as $key) {
+            $value = data_get($config, $key);
+
+            if (is_string($value) && ($text = self::text($value)) !== null) {
+                $path = "block{$index}.{$key}";
+                $runs[$path] = new Run($path, 'block_field', [$text], label: $label.' › '.Str::headline(str_replace('.', ' ', $key)));
+            }
+        }
+
+        return $runs;
+    }
+
+    /**
+     * @return array<mixed>
+     */
+    private static function config(Element $block): array
+    {
+        $config = json_decode((string) $block->getAttribute('data-config'), true);
+
+        return is_array($config) ? $config : [];
+    }
+
+    private static function hasStrings(mixed $value): bool
+    {
+        if (is_string($value)) {
+            return trim($value) !== '';
+        }
+
+        return is_array($value) && in_array(true, array_map(self::hasStrings(...), $value), true);
+    }
+
+    private static function text(?string $value): ?string
+    {
+        $value = trim((string) preg_replace('/\s+/u', ' ', (string) $value));
+
+        return $value === '' ? null : $value;
+    }
+
+    /**
+     * The marks of nodes and their descendants.
+     *
+     * @param  list<Node>  $nodes
+     * @return list<int>
+     */
+    private static function marksWithin(array $nodes): array
+    {
+        $marks = [];
+
+        foreach ($nodes as $node) {
+            if (! $node instanceof Element) {
+                continue;
+            }
+
+            foreach ([$node, ...iterator_to_array($node->querySelectorAll('['.self::MARK.']'))] as $element) {
+                if ($element->hasAttribute(self::MARK)) {
+                    $marks[] = (int) $element->getAttribute(self::MARK);
+                }
+            }
+        }
+
+        return $marks;
+    }
+
+    private static function insideOpaque(Element $element): bool
+    {
+        for ($parent = $element->parentElement; $parent !== null && $parent->localName !== 'body'; $parent = $parent->parentElement) {
+            if (self::isOpaque($parent)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static function isCustomBlock(Element $element): bool
+    {
+        return $element->getAttribute('data-type') === 'customBlock';
     }
 
     /**
@@ -192,9 +373,10 @@ final class HtmlDocument implements Document
      * structure: what $visit returns for each slot, and each block child.
      *
      * @param  callable(list<Node>, string, Element): list<string>  $visit
+     * @param  callable(list<Node>): void  $visitOpaque
      * @return list<mixed>
      */
-    private function walk(Element $block, string $path, callable $visit): array
+    private function walk(Element $block, string $path, callable $visit, callable $visitOpaque): array
     {
         $structure = [];
         $slot = 0;
@@ -221,9 +403,10 @@ final class HtmlDocument implements Document
 
             if (self::isOpaque($child)) {
                 $this->hasContent = true;
-                $structure[] = ['opaque', md5(self::withoutAlts($child))];
+                $visitOpaque([$child]);
+                $structure[] = ['opaque', md5($this->withoutTexts($child))];
             } else {
-                $structure[] = [$child->localName, self::attributes($child), $this->walk($child, $childPath, $visit)];
+                $structure[] = [$child->localName, self::attributes($child), $this->walk($child, $childPath, $visit, $visitOpaque)];
             }
         }
 
@@ -239,10 +422,9 @@ final class HtmlDocument implements Document
      * @param  iterable<Node>  $nodes
      * @param  array<string, TagInfo>  $tags
      * @param  array<string, Node>  $elements
-     * @param  array<string, Run>  $alts
      * @return list<string|Tag>
      */
-    private function tree(iterable $nodes, array &$tags, array &$elements, int &$counter, array &$alts): array
+    private function tree(iterable $nodes, array &$tags, array &$elements, int &$counter): array
     {
         $tree = [];
 
@@ -260,12 +442,12 @@ final class HtmlDocument implements Document
             }
 
             if ($node instanceof Element && self::isPair($node)) {
-                $state = [$tags, $elements, $counter, $alts, $this->images];
+                $state = [$tags, $elements, $counter];
                 $name = self::PAIRS[$node->localName].++$counter;
-                $tags[$name] = new TagInfo(self::PAIRS[$node->localName], false, self::signature($node), self::describe($node));
+                $tags[$name] = new TagInfo(self::PAIRS[$node->localName], false, $this->signature($node), self::describe($node));
                 $elements[$name] = $node;
 
-                $children = $this->tree($node->childNodes, $tags, $elements, $counter, $alts);
+                $children = $this->tree($node->childNodes, $tags, $elements, $counter);
 
                 if (Inline::hasText($children)) {
                     $tree[] = new Tag($name, $children);
@@ -274,50 +456,19 @@ final class HtmlDocument implements Document
                 }
 
                 // Formatting without text (a linked image): kept whole.
-                [$tags, $elements, $counter, $alts, $this->images] = $state;
+                [$tags, $elements, $counter] = $state;
             }
 
             if ($node instanceof Element || $node instanceof Comment) {
                 $kind = $node instanceof Element ? (self::VOIDS[$node->localName] ?? self::PAIRS[$node->localName] ?? 'html') : 'html';
                 $name = $kind.++$counter;
-                $tags[$name] = new TagInfo($kind, true, $node instanceof Element ? self::signature($node) : 'html '.md5($node->data), $node instanceof Element ? self::describe($node) : TagInfo::describe('html'));
+                $tags[$name] = new TagInfo($kind, true, $node instanceof Element ? $this->signature($node) : 'html '.md5($node->data), $node instanceof Element ? self::describe($node) : TagInfo::describe('html'));
                 $elements[$name] = $node;
                 $tree[] = new Tag($name, void: true);
-
-                if ($node instanceof Element) {
-                    $this->images($node, $alts);
-                }
             }
         }
 
         return $tree;
-    }
-
-    /**
-     * Number the images in a void tag: read their alt texts, or mark them
-     * while rebuilding.
-     *
-     * @param  array<string, Run>  $alts
-     */
-    private function images(Element $element, array &$alts): void
-    {
-        $images = $element->localName === 'img' ? [$element] : iterator_to_array($element->querySelectorAll('img'));
-
-        foreach ($images as $image) {
-            $index = $this->images++;
-
-            if ($this->rebuilding) {
-                $image->setAttribute(self::IMAGE, (string) $index);
-
-                continue;
-            }
-
-            $alt = trim((string) preg_replace('/\s+/u', ' ', (string) $image->getAttribute('alt')));
-
-            if ($alt !== '') {
-                $alts['img'.$index] = new Run('img'.$index, 'alt', [$alt], multiline: false);
-            }
-        }
     }
 
     /**
@@ -436,13 +587,13 @@ final class HtmlDocument implements Document
      * Identifies a tag across documents. Pairs: element and attributes.
      * Voids: their markup, without alt texts.
      */
-    private static function signature(Element $element): string
+    private function signature(Element $element): string
     {
         if (self::isPair($element)) {
             return $element->localName.' '.json_encode(self::attributes($element), JSON_THROW_ON_ERROR);
         }
 
-        return md5(self::withoutAlts($element));
+        return md5($this->withoutTexts($element));
     }
 
     private static function describe(Element $element): string
@@ -472,16 +623,18 @@ final class HtmlDocument implements Document
             $attributes[$attribute->name] = $attribute->value;
         }
 
-        unset($attributes[self::IMAGE]);
+        // Translated or ours.
+        unset($attributes[self::MARK], $attributes['title']);
         ksort($attributes);
 
         return $attributes;
     }
 
     /**
-     * Markup without alt texts, which are translated.
+     * Markup without the texts that are translated: alt and title texts,
+     * and the declared texts of custom blocks.
      */
-    private static function withoutAlts(Element $element): string
+    private function withoutTexts(Element $element): string
     {
         $copy = $element->cloneNode(true);
 
@@ -489,11 +642,20 @@ final class HtmlDocument implements Document
             return '';
         }
 
-        $images = $copy->localName === 'img' ? [$copy] : iterator_to_array($copy->querySelectorAll('img'));
+        foreach ([$copy, ...iterator_to_array($copy->querySelectorAll('*'))] as $descendant) {
+            $descendant->removeAttribute('alt');
+            $descendant->removeAttribute('title');
+            $descendant->removeAttribute(self::MARK);
 
-        foreach ($images as $image) {
-            $image->removeAttribute('alt');
-            $image->removeAttribute(self::IMAGE);
+            if (self::isCustomBlock($descendant)) {
+                $config = self::config($descendant);
+
+                foreach ($this->customBlocks[(string) $descendant->getAttribute('data-id')] ?? [] as $key) {
+                    data_forget($config, $key);
+                }
+
+                $descendant->setAttribute('data-config', json_encode($config, JSON_THROW_ON_ERROR));
+            }
         }
 
         return $copy->outerHTML;

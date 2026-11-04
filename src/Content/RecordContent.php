@@ -5,11 +5,14 @@ declare(strict_types=1);
 namespace Tipi\Translations\Filament\Content;
 
 use Illuminate\Database\Eloquent\Model;
+use Tipi\Translations\Concerns\HasTranslationStates;
 use Tipi\Translations\Contracts\TranslatableModel;
 
 /**
  * A record's translatable content: the segments of its source locale and
- * the stored translations lined up with them.
+ * the translations lined up with them. A locale's translation is its
+ * working copy: the unpublished draft when there is one, else the
+ * published value.
  *
  * The source decides what has to be translated: a segment exists only
  * where the source has text. Values of other locales count only where
@@ -89,6 +92,16 @@ final class RecordContent
         return isset($this->unsupported[$attribute]);
     }
 
+    /**
+     * Why the attribute's source can't be translated, for translators.
+     */
+    public function unsupportedReason(string $attribute): ?string
+    {
+        $this->segments();
+
+        return $this->unsupported[$attribute] ?? null;
+    }
+
     public function sourceValue(string $attribute): mixed
     {
         return $this->record->getTranslation($attribute, $this->source);
@@ -108,7 +121,61 @@ final class RecordContent
 
         return $this->alignments[$locale][$attribute] ??= $this->isUnsupported($attribute)
             ? new Alignment
-            : $this->schema->align($attribute, $this->sourceValue($attribute), $this->record->getTranslation($attribute, $locale));
+            : $this->schema->align($attribute, $this->sourceValue($attribute), $this->working($locale, $attribute));
+    }
+
+    public function supportsDrafts(): bool
+    {
+        return in_array(HasTranslationStates::class, class_uses_recursive($this->record), true);
+    }
+
+    /**
+     * What translators work on: the unpublished draft, or else the
+     * published translation.
+     */
+    public function working(string $locale, string $attribute): mixed
+    {
+        return $this->draft($locale, $attribute) ?? $this->record->getTranslation($attribute, $locale);
+    }
+
+    public function draft(string $locale, string $attribute): mixed
+    {
+        return $this->supportsDrafts() ? $this->record->getTranslationDraft($attribute, $locale) : null;
+    }
+
+    /**
+     * The fingerprints of the source texts each translated segment was
+     * made from: segment path => fingerprint.
+     *
+     * @return array<string, string>
+     */
+    public function sources(string $locale, string $attribute): array
+    {
+        $sources = $this->supportsDrafts() ? $this->record->getTranslationSource($attribute, $locale) : null;
+
+        return is_array($sources) ? array_filter($sources, is_string(...)) : [];
+    }
+
+    /**
+     * Translated segments whose source text changed since they were
+     * translated: segment path => true. Only segments with a recorded
+     * fingerprint can be told.
+     *
+     * @return array<string, true>
+     */
+    public function stale(string $locale, string $attribute): array
+    {
+        $texts = $this->alignment($locale, $attribute)->texts;
+        $sources = $this->sources($locale, $attribute);
+        $stale = [];
+
+        foreach ($this->segments()[$attribute] ?? [] as $segment) {
+            if (isset($texts[$segment->path], $sources[$segment->path]) && $sources[$segment->path] !== $segment->hash()) {
+                $stale[$segment->path] = true;
+            }
+        }
+
+        return $stale;
     }
 
     /**
@@ -138,24 +205,35 @@ final class RecordContent
     }
 
     /**
-     * @return array{translated: int, total: int, review: list<string>}
+     * @return array{translated: int, total: int, review: list<string>, stale: int, drafts: list<string>, unsupported: list<string>}
      */
     public function progress(string $locale): array
     {
         $translated = 0;
         $total = 0;
+        $stale = 0;
         $review = [];
+        $drafts = [];
 
         foreach ($this->segments() as $attribute => $segments) {
             $total += count($segments);
             $translated += count(array_intersect_key($this->alignment($locale, $attribute)->texts, array_flip(array_map(fn (Segment $segment): string => $segment->path, $segments))));
+            $stale += count($this->stale($locale, $attribute));
 
             if ($this->alignment($locale, $attribute)->orphans !== []) {
                 $review[] = $attribute;
             }
+
+            if ($this->draft($locale, $attribute) !== null) {
+                $drafts[] = $attribute;
+            }
         }
 
-        return ['translated' => $translated, 'total' => $total, 'review' => $review];
+        // Content that can't be translated here still counts: it is
+        // never left out of completeness unnoticed.
+        $unsupported = array_keys($this->unsupported);
+
+        return ['translated' => $translated, 'total' => $total, 'review' => $review, 'stale' => $stale, 'drafts' => $drafts, 'unsupported' => $unsupported];
     }
 
     public function flush(): void

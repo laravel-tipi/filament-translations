@@ -44,7 +44,7 @@ final class MarkdownWriter
             'quote' => self::prefix($this->blocks($block['children']), '> ', '>'),
             'list' => $this->list($block),
             'code' => self::code($block['literal'], $block['info']),
-            'html' => $block['literal'],
+            'html' => $this->html($block),
             'hr' => '***',
             'table' => $this->table($block),
         };
@@ -127,9 +127,9 @@ final class MarkdownWriter
                 'i' => '*'.$this->inline($node->children, $specs, $lineStart).'*',
                 'b' => '**'.$this->inline($node->children, $specs, $lineStart).'**',
                 's' => '~~'.$this->inline($node->children, $specs, $lineStart).'~~',
-                'a' => '['.$this->inline($node->void ? $spec['children'] : $node->children, $specs, $lineStart).']('.self::destination($spec['url'], $spec['title']).')',
+                'a' => '['.$this->inline($node->void ? $spec['children'] : $node->children, $specs, $lineStart).']('.self::destination($spec['url'], $this->attributeText('title', $spec['index'])).')',
                 'url' => '<'.$spec['text'].'>',
-                'img' => '!['.self::escape($this->alt($spec['index'])).']('.self::destination($spec['url'], $spec['title']).')',
+                'img' => '!['.self::escape($this->attributeText('alt', $spec['index'])).']('.self::destination($spec['url'], $this->attributeText('title', $spec['index'])).')',
                 'code' => self::codeSpan($spec['literal']),
                 'html' => $spec['literal'],
             };
@@ -138,11 +138,38 @@ final class MarkdownWriter
         return $markdown;
     }
 
-    private function alt(int $index): string
+    /**
+     * The translated alt or title text of an image or link, '' without one.
+     */
+    private function attributeText(string $kind, int $index): string
     {
-        $tree = $this->trees['img'.$index] ?? null;
+        $tree = $this->trees[$kind.$index] ?? null;
 
         return $tree === null ? '' : Inline::plain($tree);
+    }
+
+    /**
+     * An HTML block: rebuilt by the HTML reader with its translated runs.
+     *
+     * @param  array<string, mixed>  $block
+     */
+    private function html(array $block): string
+    {
+        if ($block['document'] === null) {
+            return $block['literal'];
+        }
+
+        $trees = [];
+
+        foreach (array_keys($block['document']->runs()) as $runPath) {
+            $tree = $this->trees[$block['path'].'/'.$runPath] ?? null;
+
+            if ($tree !== null) {
+                $trees[$runPath] = $tree;
+            }
+        }
+
+        return trim((string) $block['document']->rebuild($trees));
     }
 
     /**

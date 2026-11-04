@@ -16,19 +16,26 @@ use Tipi\Translations\Filament\Content\Format;
  * tree and nothing else, so every block, attribute and embed stays the
  * source's. Inline elements become tags; elements without text, code,
  * media and editor nodes (data-type) are kept whole as void tags.
- * Images' alt texts are segments of their own.
+ * Alt and title texts are segments of their own; so are the declared
+ * config texts of custom blocks, and a custom block with undeclared text
+ * makes the document untranslatable.
  *
  * @internal
  */
-final class Html implements Format
+final readonly class Html implements Format
 {
+    /**
+     * @param  array<string, list<string>>  $customBlocks  custom block id => its translatable config keys
+     */
+    public function __construct(private array $customBlocks = []) {}
+
     public function read(mixed $value): ?Document
     {
         if (! is_string($value) || trim($value) === '') {
             return null;
         }
 
-        $document = new HtmlDocument($value);
+        $document = new HtmlDocument($value, $this->customBlocks);
 
         return $document->isEmpty() ? null : $document;
     }

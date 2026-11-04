@@ -69,6 +69,11 @@ final class TranslationEditor
     private ?string $itemKey = 'id';
 
     /**
+     * @var array<string, list<string>>
+     */
+    private array $customBlocks = [];
+
+    /**
      * A new editor with the current panel's defaults applied.
      */
     public static function make(): self
@@ -262,6 +267,21 @@ final class TranslationEditor
         return $this;
     }
 
+    /**
+     * The texts in rich editor custom blocks: block id => the config keys
+     * that hold text (dot notation for nested keys), [] for none. A custom
+     * block with text that isn't declared makes its field untranslatable,
+     * so its text is never left out unnoticed.
+     *
+     * @param  array<string, list<string>>  $blocks
+     */
+    public function customBlocks(array $blocks): self
+    {
+        $this->customBlocks = array_map(fn (array $keys): array => array_values(array_map(strval(...), $keys)), $blocks);
+
+        return $this;
+    }
+
     public function getPresentation(): EditorPresentation
     {
         return $this->presentation;
@@ -331,6 +351,14 @@ final class TranslationEditor
     public function getItemKey(): ?string
     {
         return $this->itemKey;
+    }
+
+    /**
+     * @return array<string, list<string>>
+     */
+    public function getCustomBlocks(): array
+    {
+        return $this->customBlocks;
     }
 
     public function getSourceLocale(Model $record): ?string

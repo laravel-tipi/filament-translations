@@ -7,10 +7,11 @@ use Tipi\Translations\Filament\Content\Formats\Html;
 use Tipi\Translations\Filament\Content\Formats\RichText;
 use Tipi\Translations\Filament\Content\InvalidTranslation;
 use Tipi\Translations\Filament\Content\Nodes\DocumentNode;
+use Tipi\Translations\Filament\Content\UnsupportedContent;
 
 function richText(): DocumentNode
 {
-    return new DocumentNode(new Html);
+    return new DocumentNode(new Html(['hero' => ['heading']]));
 }
 
 // What Filament's RichEditor stores.
@@ -29,7 +30,8 @@ it('splits HTML into runs with tags for inline elements', function (): void {
         '2.0.0~0' => 'Dry',
         '2.1.0~0' => 'Red <i1>and</i1> <s2>sweet</s2>',
         '2.1.1.0.0~0' => 'Nested',
-        'img0' => 'A vineyard',
+        'alt0' => 'A vineyard',
+        'block1.heading' => 'Not translated',
         '5.0.0.0.0~0' => 'Year',
         '5.0.1.0.0~0' => '2019',
         '6.0~0' => 'Quoted',
@@ -40,7 +42,8 @@ it('changes only the text of the source tree', function (): void {
     $node = richText();
     $texts = array_map(fn (string $text): string => 'ქა '.$text, texts($node, WINE_HTML));
     $texts['1~0'] = "ნახეთ <a2>რუკა</a2>: <b1>შესანიშნავი</b1> ღვინო.\nძვირფასო <span3/>, გაუშვით <code4/>.";
-    $texts['img0'] = 'ვენახი';
+    $texts['alt0'] = 'ვენახი';
+    $texts['block1.heading'] = 'სათარგმნი';
     unset($texts['2.0.0~0']);
 
     $translated = $node->rebuild('', WINE_HTML, $texts);
@@ -51,7 +54,7 @@ it('changes only the text of the source tree', function (): void {
         // Untranslated: the block stays, empty.
         .'<ul><li><p></p></li><li><p>ქა Red <em>and</em> <s>sweet</s></p><ul><li><p>ქა Nested</p></li></ul></li></ul>'
         .'<p><img src="/vineyard.jpg" alt="ვენახი"></p>'
-        .'<div data-type="customBlock" data-config="{&quot;heading&quot;:&quot;Not translated&quot;}" data-id="hero"></div>'
+        .'<div data-type="customBlock" data-config="{&quot;heading&quot;:&quot;სათარგმნი&quot;}" data-id="hero"></div>'
         .'<table><tbody><tr><th><p>ქა Year</p></th></tr><tr><td><p>ქა 2019</p></td></tr></tbody></table>'
         .'<blockquote><p>ქა Quoted</p></blockquote>',
     );
@@ -120,4 +123,36 @@ it('translates rich text stored as TipTap JSON, and keeps it JSON', function ():
         ->and($translated['type'])->toBe('doc')
         ->and($translated['content'][0]['content'][0])->toMatchArray(['type' => 'text', 'text' => 'მშრალი', 'marks' => [['type' => 'bold']]])
         ->and(texts($node, $translated))->toBe(['0~0' => '<b1>მშრალი</b1> წითელი.']);
+});
+
+it('translates title attributes and leaves untranslated ones empty', function (): void {
+    $node = richText();
+    $source = '<p title="Note">A <abbr title="Georgian">KA</abbr> wine, <a href="/x" title="More">more</a>.</p>';
+
+    expect(texts($node, $source))->toBe([
+        '0~0' => 'A <span1>KA</span1> wine, <a2>more</a2>.',
+        'title1' => 'Georgian',
+        'title2' => 'More',
+        'title0' => 'Note',
+    ]);
+
+    expect($node->rebuild('', $source, ['0~0' => 'ქართული <span1>KA</span1> ღვინო, <a2>მეტი</a2>.', 'title1' => 'ქართული']))
+        // Untranslated titles are empty, never the source's.
+        ->toBe('<p title="">ქართული <abbr title="ქართული">KA</abbr> ღვინო, <a href="/x" title="">მეტი</a>.</p>');
+});
+
+it('refuses custom blocks with text that isn’t declared', function (): void {
+    $source = '<p>Hi</p><div data-type="customBlock" data-id="cta" data-config="{&quot;label&quot;:&quot;Buy now&quot;}"></div>';
+
+    expect(fn () => (new DocumentNode(new Html))->segments('body', '', [], $source))
+        ->toThrow(UnsupportedContent::class);
+
+    // Declared without texts: kept as it is.
+    expect(texts(new DocumentNode(new Html(['cta' => []])), $source))->toBe(['0~0' => 'Hi']);
+});
+
+it('keeps custom blocks without text and code whole', function (): void {
+    $source = '<div data-type="customBlock" data-id="divider" data-config="{&quot;size&quot;:2}"></div><pre><code>echo 1;</code></pre><p>Text</p>';
+
+    expect(texts(new DocumentNode(new Html), $source))->toBe(['2~0' => 'Text']);
 });

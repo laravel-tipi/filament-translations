@@ -7,6 +7,7 @@ use Tipi\Translations\Filament\Content\Alignment;
 use Tipi\Translations\Filament\Content\Formats\Markdown;
 use Tipi\Translations\Filament\Content\InvalidTranslation;
 use Tipi\Translations\Filament\Content\Nodes\DocumentNode;
+use Tipi\Translations\Filament\Content\UnsupportedContent;
 
 function markdown(): DocumentNode
 {
@@ -47,12 +48,13 @@ it('splits Markdown into blocks with tags for inline formatting', function (): v
     expect(texts(markdown(), WINE_MARKDOWN))->toBe([
         '0' => 'Saperavi',
         '1' => 'This is <b1>excellent</b1> Georgian wine, see <a2>the map</a2>. It ages <i3>well</i3>.',
+        'title0' => 'Map',
         '2.0' => 'Kept in a <code1/>.',
         '3.0.0' => 'Harvest',
         '3.1.0' => 'Press',
         '3.1.1.0.0' => 'by <b1>hand</b1>',
         // The image's paragraph has no text: only its description.
-        'img0' => 'A vineyard',
+        'alt1' => 'A vineyard',
         '6.0.0' => 'Year',
         '6.0.1' => 'Note',
         '6.1.0' => '2019',
@@ -72,7 +74,7 @@ it('rebuilds the source structure with the translated text', function (): void {
     // Only the text changed: same blocks, URLs, code, table and task list.
     expect($node->skeleton($translated))->toBe($node->skeleton(WINE_MARKDOWN))
         ->and(html($translated))->toContain('<h2>ka-Saperavi</h2>')
-        ->toContain('<p>ეს <a href="https://example.com/map" title="Map">რუკაზე</a> ნაჩვენები <strong>შესანიშნავი</strong> ღვინოა. <em>კარგად</em> ძველდება.</p>')
+        ->toContain('<p>ეს <a href="https://example.com/map" title="ka-Map">რუკაზე</a> ნაჩვენები <strong>შესანიშნავი</strong> ღვინოა. <em>კარგად</em> ძველდება.</p>')
         ->toContain('<code>qvevri</code>')
         ->toContain('<img src="/vineyard.jpg" alt="ka-A ka-vineyard" />')
         ->toContain("<pre><code class=\"language-php\">echo 'not translated';")
@@ -150,9 +152,48 @@ it('refuses formatting Markdown can’t express instead of changing it', functio
 it('keeps links around images and autolinks whole', function (): void {
     $source = '[![Logo](/logo.png)](https://example.com) Visit <https://example.com>.';
 
-    expect(texts(markdown(), $source))->toBe(['0' => '<a1/> Visit <url3/>.', 'img0' => 'Logo']);
+    expect(texts(markdown(), $source))->toBe(['0' => '<a1/> Visit <url3/>.', 'alt1' => 'Logo']);
 
-    $translated = markdown()->rebuild('', $source, ['0' => 'ეწვიეთ <url3/> <a1/>', 'img0' => 'ლოგო']);
+    $translated = markdown()->rebuild('', $source, ['0' => 'ეწვიეთ <url3/> <a1/>', 'alt1' => 'ლოგო']);
 
     expect(html($translated))->toBe('<p>ეწვიეთ <a href="https://example.com">https://example.com</a> <a href="https://example.com"><img src="/logo.png" alt="ლოგო" /></a></p>');
+});
+
+it('translates link and image titles, never copies the source’s', function (): void {
+    $source = 'See [the map](https://example.com/map "Our vineyards") and ![A cellar](/c.jpg "The cellar").';
+
+    expect(texts(markdown(), $source))->toBe([
+        '0' => 'See <a1>the map</a1> and <img2/>.',
+        'title0' => 'Our vineyards',
+        'alt1' => 'A cellar',
+        'title1' => 'The cellar',
+    ]);
+
+    // Untranslated titles are left out, not stored in English.
+    $translated = markdown()->rebuild('', $source, ['0' => 'იხილეთ <a1>რუკა</a1> და <img2/>.', 'alt1' => 'მარანი']);
+
+    expect(html($translated))->toBe('<p>იხილეთ <a href="https://example.com/map">რუკა</a> და <img src="/c.jpg" alt="მარანი" />.</p>');
+});
+
+it('translates the text of HTML blocks', function (): void {
+    $source = "Intro.\n\n<div class=\"note\"><p>Keep <strong>cool</strong>.</p></div>\n\nOutro.";
+
+    expect(texts(markdown(), $source))->toBe(['0' => 'Intro.', '1/0.0~0' => 'Keep <b1>cool</b1>.', '2' => 'Outro.']);
+
+    $translated = markdown()->rebuild('', $source, ['1/0.0~0' => 'შეინახეთ <b1>გრილად</b1>.']);
+
+    expect(html($translated))->toContain('<div class="note"><p>შეინახეთ <strong>გრილად</strong>.</p></div>')
+        ->not->toContain('Keep');
+});
+
+it('refuses HTML it can’t translate safely', function (string $source): void {
+    expect(fn () => markdown()->segments('body', '', [], $source))->toThrow(UnsupportedContent::class);
+})->with([
+    // Text in a block whose closing tag is in another block: the parser would complete it.
+    'unclosed block with text' => ["<div><p>Kept</p>\n\nParagraph\n\n</div>"],
+    'text in inline attributes' => ['A <abbr title="Georgian">KA</abbr> wine.'],
+]);
+
+it('never translates code', function (): void {
+    expect(texts(markdown(), "Run `make`:\n\n```\nmake install\n```\n\n    indented code"))->toBe(['0' => 'Run <code1/>:']);
 });

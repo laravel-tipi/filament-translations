@@ -22,17 +22,21 @@ final class RichText implements Format
     private ?Editor $editor = null;
 
     /**
-     * @param  (Closure(): Editor)|null  $editor  the field's TipTap editor, with its extensions
+     * @param  (Closure(): Editor)|null  $editorUsing  the field's TipTap editor, with its extensions
+     * @param  array<string, list<string>>  $customBlocks  custom block id => its translatable config keys
      */
-    public function __construct(private readonly ?Closure $editorUsing = null) {}
+    public function __construct(
+        private readonly ?Closure $editorUsing = null,
+        private readonly array $customBlocks = [],
+    ) {}
 
     public function read(mixed $value): ?Document
     {
         if (self::isJson($value)) {
-            return (new TipTapJson($this->editor()))->read($value);
+            return (new TipTapJson($this->editor(), $this->customBlocks))->read($value);
         }
 
-        return (new Html)->read($value);
+        return (new Html($this->customBlocks))->read($value);
     }
 
     private static function isJson(mixed $value): bool

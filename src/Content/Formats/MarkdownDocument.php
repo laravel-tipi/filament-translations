@@ -52,7 +52,7 @@ final readonly class MarkdownDocument implements Document
             'quote' => ['q', self::skeletonOf($block['children'])],
             'list' => ['l', $block['ordered'], $block['start'], $block['delimiter'], $block['bullet'], $block['tight'], array_map(self::skeletonOf(...), $block['items'])],
             'code' => ['c', md5($block['info']."\n".$block['literal'])],
-            'html' => ['x', md5($block['literal'])],
+            'html' => ['x', $block['document']?->skeleton() ?? md5($block['literal'])],
             'hr' => ['hr'],
             'table' => ['t', $block['align'], count($block['head']), array_map(count(...), $block['rows'])],
         }, $blocks);

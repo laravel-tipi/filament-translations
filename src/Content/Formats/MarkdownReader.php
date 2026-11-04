@@ -51,7 +51,10 @@ final class MarkdownReader
      */
     public array $specs = [];
 
-    private int $images = 0;
+    /**
+     * Images and links read so far, to number their alt and title texts.
+     */
+    private int $texts = 0;
 
     /**
      * @param  iterable<Node>  $nodes
@@ -72,10 +75,10 @@ final class MarkdownReader
                 $node instanceof ListBlock => $this->list($node, $at),
                 $node instanceof FencedCode => ['type' => 'code', 'literal' => $node->getLiteral(), 'info' => (string) $node->getInfo()],
                 $node instanceof IndentedCode => ['type' => 'code', 'literal' => $node->getLiteral(), 'info' => ''],
-                $node instanceof HtmlBlock => ['type' => 'html', 'literal' => rtrim($node->getLiteral(), "\n")],
+                $node instanceof HtmlBlock => $this->htmlBlock($node->getLiteral(), $at),
                 $node instanceof ThematicBreak => ['type' => 'hr'],
                 $node instanceof Table => $this->table($node, $at),
-                default => throw new UnsupportedContent('Markdown block ['.$node::class.'] is not supported.'),
+                default => throw new UnsupportedContent('markdown', ['construct' => class_basename($node)]),
             };
         }
 
@@ -109,7 +112,7 @@ final class MarkdownReader
 
         foreach ($list->children() as $item) {
             if (! $item instanceof ListItem) {
-                throw new UnsupportedContent('Markdown list children must be list items.');
+                throw new UnsupportedContent('markdown', ['construct' => 'list']);
             }
 
             $items[] = $this->blocks($item->children(), $path.'.'.$index++, 'list_item');
@@ -245,7 +248,9 @@ final class MarkdownReader
                     continue;
                 }
 
-                $pair = ['a', 'a '.$url, ['url' => $url, 'title' => (string) $node->getTitle()]];
+                $index = $this->texts++;
+                $this->attributeText('title', $index, (string) $node->getTitle());
+                $pair = ['a', 'a '.$url, ['url' => $url, 'index' => $index]];
             }
 
             if ($pair !== null) {
@@ -277,8 +282,8 @@ final class MarkdownReader
             $tree[] = match (true) {
                 $node instanceof Image => $this->image($node, $path, $tags, $specs, $counter),
                 $node instanceof Code => $this->void('code', $node->getLiteral(), ['literal' => $node->getLiteral()], $tags, $specs, $counter),
-                $node instanceof HtmlInline => $this->void('html', $node->getLiteral(), ['literal' => $node->getLiteral()], $tags, $specs, $counter),
-                default => throw new UnsupportedContent('Markdown inline ['.$node::class.'] is not supported.'),
+                $node instanceof HtmlInline => $this->void('html', self::inlineHtml($node->getLiteral()), ['literal' => $node->getLiteral()], $tags, $specs, $counter),
+                default => throw new UnsupportedContent('markdown', ['construct' => class_basename($node)]),
             };
         }
 
@@ -292,14 +297,25 @@ final class MarkdownReader
     private function image(Image $image, string $path, array &$tags, array &$specs, int &$counter): Tag
     {
         $alt = trim(self::plainText($image));
-        $index = $this->images++;
+        $index = $this->texts++;
 
-        if ($alt !== '') {
-            $this->runs['img'.$index] = new Run('img'.$index, 'alt', [$alt], multiline: false);
-            $this->specs['img'.$index] = [];
+        $this->attributeText('alt', $index, $alt);
+        $this->attributeText('title', $index, (string) $image->getTitle());
+
+        return $this->void('img', $image->getUrl(), ['url' => $image->getUrl(), 'index' => $index], $tags, $specs, $counter, $alt === '' ? $image->getUrl() : $alt);
+    }
+
+    /**
+     * An image's description or a link's title: a segment of its own.
+     */
+    private function attributeText(string $kind, int $index, string $text): void
+    {
+        $text = trim((string) preg_replace('/\s+/u', ' ', $text));
+
+        if ($text !== '') {
+            $this->runs[$kind.$index] = new Run($kind.$index, $kind, [$text], multiline: false);
+            $this->specs[$kind.$index] = [];
         }
-
-        return $this->void('img', $image->getUrl(), ['url' => $image->getUrl(), 'title' => (string) $image->getTitle(), 'index' => $index], $tags, $specs, $counter, $alt === '' ? $image->getUrl() : $alt);
     }
 
     /**
@@ -331,6 +347,55 @@ final class MarkdownReader
         }
 
         return $names;
+    }
+
+    /**
+     * Inline HTML is kept as is, so it can't hold text in attributes.
+     *
+     * @throws UnsupportedContent
+     */
+    private static function inlineHtml(string $literal): string
+    {
+        if (preg_match('/\s(?:title|alt|aria-label|placeholder)\s*=\s*(?:"\s*[^"\s]|\'\s*[^\'\s]|[^\s"\'>])/i', $literal) === 1) {
+            throw new UnsupportedContent('markdown_inline_html', ['html' => mb_strimwidth($literal, 0, 60, '…')]);
+        }
+
+        return $literal;
+    }
+
+    /**
+     * An HTML block: translated with the HTML reader when that reads and
+     * writes it back unchanged; kept as is when it has no text.
+     *
+     * @return array<string, mixed>
+     *
+     * @throws UnsupportedContent
+     */
+    private function htmlBlock(string $literal, string $path): array
+    {
+        $literal = rtrim($literal, "\n");
+        $document = (new Html)->read($literal);
+
+        if ($document === null || ! in_array(true, array_map(fn (Run $run): bool => $run->hasText(), $document->runs()), true)) {
+            return ['type' => 'html', 'literal' => $literal, 'document' => null, 'path' => $path];
+        }
+
+        $normalize = fn (string $html): string => trim((string) preg_replace('/\s+/', ' ', $html));
+        $same = array_map(fn (Run $run): array => $run->nodes, $document->runs());
+
+        // Fragments the HTML parser completes or reorders (an opening tag
+        // whose closing tag is in another block) can't be rewritten.
+        if ($normalize((string) $document->rebuild($same)) !== $normalize($literal)) {
+            throw new UnsupportedContent('markdown_html', ['html' => mb_strimwidth($literal, 0, 60, '…')]);
+        }
+
+        foreach ($document->runs() as $runPath => $run) {
+            $prefixed = $path.'/'.$runPath;
+            $this->runs[$prefixed] = new Run($prefixed, $run->role, $run->nodes, $run->tags, $run->multiline, $run->label);
+            $this->specs[$prefixed] = [];
+        }
+
+        return ['type' => 'html', 'literal' => $literal, 'document' => $document, 'path' => $path];
     }
 
     private static function plainText(Node $node): string
