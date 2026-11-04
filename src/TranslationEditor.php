@@ -361,6 +361,14 @@ final class TranslationEditor
         return $this->customBlocks;
     }
 
+    /**
+     * Whether the source locale is decided per record.
+     */
+    public function hasSourceLocalePerRecord(): bool
+    {
+        return $this->sourceLocale instanceof Closure;
+    }
+
     public function getSourceLocale(Model $record): ?string
     {
         return $this->sourceLocale instanceof Closure ? ($this->sourceLocale)($record) : $this->sourceLocale;

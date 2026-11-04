@@ -120,3 +120,12 @@ function texts(Node $node, mixed $value): array
 
     return $texts;
 }
+
+/**
+ * What a reader of the locale gets: the published translation, or the
+ * fallback.
+ */
+function readerSees(Model $record, string $attribute, string $locale = 'ka'): mixed
+{
+    return $record->fresh()->getTranslation($attribute, $locale, fallback: true);
+}

@@ -10,14 +10,18 @@ use Tipi\Support\Locale;
 use Tipi\Translations\Filament\Enums\TranslationStatus;
 
 /**
- * The translation progress of one locale of a record: how many of the
- * source's segments it translates.
+ * The translation progress of one locale of a record. Status, counts and
+ * freshness describe the published translation: what readers see.
+ * Unpublished drafts are reported beside it ($drafts, $drafted), never
+ * counted as translated.
  */
 final readonly class LocaleProgress
 {
     /**
-     * @param  list<string>  $review  attributes with stored translations that no longer line up with the source
-     * @param  int  $stale  translated segments whose source text changed since
+     * @param  int  $translated  published segments
+     * @param  int  $drafted  segments translated in the working copies (published values, or drafts where there are some)
+     * @param  list<string>  $review  attributes whose published translation no longer lines up with the source
+     * @param  int  $stale  published segments whose source text changed since
      * @param  list<string>  $drafts  attributes with unpublished drafts
      * @param  list<string>  $unsupported  attributes whose source can't be translated as text
      */
@@ -25,6 +29,7 @@ final readonly class LocaleProgress
         public Locale $locale,
         public int $translated,
         public int $total,
+        public int $drafted = 0,
         public bool $hasValues = false,
         public array $review = [],
         public int $stale = 0,
@@ -57,6 +62,10 @@ final readonly class LocaleProgress
         return $this->outdatedSince !== null;
     }
 
+    /**
+     * Whether readers see a different translation than the one being
+     * worked on.
+     */
     public function hasDrafts(): bool
     {
         return $this->drafts !== [];
@@ -107,7 +116,7 @@ final readonly class LocaleProgress
         }
 
         if ($this->drafts !== []) {
-            $summary .= ' '.__('tipi-filament-translations::editor.progress.drafts');
+            $summary .= ' '.__('tipi-filament-translations::editor.progress.drafts', ['drafted' => $this->drafted, 'total' => $this->total]);
         }
 
         if ($this->unsupported !== []) {

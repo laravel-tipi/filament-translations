@@ -60,6 +60,8 @@ use Tipi\Translations\Filament\TranslationEditor;
  *                   fingerprint, and the loaded texts ("base")
  *     translations  locale => segment key => text, for loaded locales
  *     conflicts     locale => what the last save ran into
+ *     reviewed      locale => segment key => true: confirmed still correct
+ *     publish       locale => attribute => true: publish its ready draft
  *
  * Contract:
  * - Segments show exactly what is stored for their locale, never fallback
@@ -70,7 +72,11 @@ use Tipi\Translations\Filament\TranslationEditor;
  *   whose source text changed, or an attribute whose source structure
  *   changed since loading is a conflict: nothing is saved, the
  *   translator's text is kept and the conflict is shown.
- * - Drafts are fine: completeness is reported, never required.
+ * - Drafts are fine: completeness is reported, never required. Readers
+ *   see published values only. A save publishes an attribute it changes
+ *   when the result is complete and shows readers no outdated text they
+ *   didn't see before; otherwise it saves a draft. A draft that became
+ *   complete because the source changed is published only on request.
  * - Locale codes, segment keys and texts in the state are never trusted:
  *   only offered, authorized locales and the source's segments are
  *   written, checked again on the server.
@@ -90,6 +96,8 @@ final class RecordEditor
     public const string CONFLICTS = 'conflicts';
 
     public const string REVIEWED = 'reviewed';
+
+    public const string PUBLISH = 'publish';
 
     public readonly LocaleContext $context;
 
@@ -488,6 +496,7 @@ final class RecordEditor
             Hidden::make(self::LOADED),
             Hidden::make(self::CONFLICTS),
             Hidden::make(self::REVIEWED),
+            Hidden::make(self::PUBLISH),
             // Sized by the editor's width, so modals and pages behave alike.
             Grid::make(['default' => 1, '@xl' => 4])
                 ->gridContainer()
@@ -527,6 +536,7 @@ final class RecordEditor
             self::TRANSLATIONS => $locale === null ? [] : [$locale => $this->storedTexts($locale)],
             self::CONFLICTS => [],
             self::REVIEWED => [],
+            self::PUBLISH => [],
         ];
     }
 
@@ -635,6 +645,21 @@ final class RecordEditor
     }
 
     /**
+     * Attributes whose ready draft the translator asked to publish.
+     *
+     * @param  array<string, mixed>|object  $state
+     * @return list<string>
+     */
+    public function publishRequests(array|object $state, string $locale): array
+    {
+        $requests = data_get($state, self::PUBLISH.'.'.$locale);
+
+        return is_array($requests)
+            ? array_values(array_intersect($this->attributes(), array_map('strval', array_keys(array_filter($requests)))))
+            : [];
+    }
+
+    /**
      * Load a locale into the editor the first time it is opened.
      */
     public function loadLocale(Schema $root, string $locale): void
@@ -692,7 +717,9 @@ final class RecordEditor
 
     public function isChanged(Schema $root, string $locale): bool
     {
-        return $this->changes($root->getRawState(), $locale) !== [] || $this->reviewed($root->getRawState(), $locale) !== [];
+        $state = $root->getRawState();
+
+        return $this->changes($state, $locale) !== [] || $this->reviewed($state, $locale) !== [] || $this->publishRequests($state, $locale) !== [];
     }
 
     private static function loose(mixed $text): ?string
@@ -838,13 +865,18 @@ final class RecordEditor
         $this->setConflicts($root, $locale, ['segments' => [], 'attributes' => []]);
     }
 
-    private function clearReviewed(Schema $root, string $locale): void
+    /**
+     * Forget a saved locale's confirmations and publish requests.
+     */
+    private function clearRequests(Schema $root, string $locale): void
     {
-        $reviewed = data_get($root->getRawState(), self::REVIEWED);
-        $reviewed = is_array($reviewed) ? $reviewed : [];
-        unset($reviewed[$locale]);
+        foreach ([self::REVIEWED, self::PUBLISH] as $key) {
+            $requests = data_get($root->getRawState(), $key);
+            $requests = is_array($requests) ? $requests : [];
+            unset($requests[$locale]);
 
-        $root->partialRawState([self::REVIEWED => $reviewed]);
+            $root->partialRawState([$key => $requests]);
+        }
     }
 
     /*
@@ -868,6 +900,7 @@ final class RecordEditor
         $loaded = $this->loaded($state);
         $pending = [];
         $reviewed = [];
+        $publish = [];
         $errors = [];
 
         foreach ($loaded as $locale => $entry) {
@@ -878,6 +911,10 @@ final class RecordEditor
             $segments = $this->segments($locale);
 
             $changes = $this->changes($state, $locale);
+
+            if ($this->publishRequests($state, $locale) !== []) {
+                $publish[$locale] = $this->publishRequests($state, $locale);
+            }
 
             // Confirmed as still correct: saved with its source fingerprint.
             foreach ($this->reviewed($state, $locale) as $key) {
@@ -904,12 +941,12 @@ final class RecordEditor
             throw ValidationException::withMessages($errors);
         }
 
-        if ($pending === []) {
+        if ($pending === [] && $publish === []) {
             return [];
         }
 
         try {
-            $changed = $this->record->lockTranslationsForUpdate(fn (): array => $this->write($pending, $loaded, $reviewed));
+            $changed = $this->record->lockTranslationsForUpdate(fn (): array => $this->write($pending, $loaded, $reviewed, $publish));
         } catch (TranslationConflictException $exception) {
             // The record holds what is stored now: show it with the conflicts.
             $this->flush();
@@ -926,7 +963,8 @@ final class RecordEditor
 
         $this->flush();
 
-        foreach (array_keys($pending) as $locale) {
+        foreach (array_keys($pending + $publish) as $locale) {
+            $locale = (string) $locale;
             $loadedNow = $this->loaded($root->getRawState());
             $loadedNow[$locale] = $this->entry($locale);
 
@@ -936,7 +974,7 @@ final class RecordEditor
             );
 
             $this->clearConflicts($root, $locale);
-            $this->clearReviewed($root, $locale);
+            $this->clearRequests($root, $locale);
         }
 
         return $changed;
@@ -946,19 +984,24 @@ final class RecordEditor
      * Inside the lock: merge the changes into what is stored now and set
      * them on the record, which lockTranslationsForUpdate() then saves.
      *
-     * Complete attributes are published (their draft forgotten); partly
-     * translated ones are saved as drafts, so readers keep seeing the
-     * published translation or the fallback, never gaps.
+     * An attribute is published (its draft forgotten) when the result is
+     * complete and shows readers no outdated text they didn't see before
+     * (RecordContent::publishable()); otherwise it is saved as a draft, so
+     * readers keep seeing the published translation or the fallback, never
+     * gaps or a translation of an older source text. Attributes in
+     * $publish are written without changes: their draft is published when
+     * it still may be.
      *
      * @param  array<string, array<string, string|null>>  $pending
      * @param  array<string, array<string, mixed>>  $loaded
      * @param  array<string, array<string, true>>  $reviewed
+     * @param  array<string, list<string>>  $publish
      * @return list<string>
      *
      * @throws TranslationConflictException
      * @throws InvalidTranslation
      */
-    private function write(array $pending, array $loaded, array $reviewed): array
+    private function write(array $pending, array $loaded, array $reviewed, array $publish = []): array
     {
         // The record was read again: start from what is stored now.
         $this->flush();
@@ -967,12 +1010,13 @@ final class RecordEditor
         $conflicts = [];
         $writes = [];
 
-        foreach ($pending as $locale => $changes) {
+        foreach (array_keys($pending + $publish) as $locale) {
+            $locale = (string) $locale;
             $entry = $loaded[$locale];
             $segments = $this->segments($locale);
             $byAttribute = [];
 
-            foreach ($changes as $key => $text) {
+            foreach ($pending[$locale] ?? [] as $key => $text) {
                 $attribute = $entry['segments'][$key][0] ?? null;
 
                 if (is_string($attribute) && in_array($attribute, $this->attributes(), true)) {
@@ -980,10 +1024,22 @@ final class RecordEditor
                 }
             }
 
+            foreach ($publish[$locale] ?? [] as $attribute) {
+                $byAttribute[$attribute] ??= [];
+            }
+
             foreach ($byAttribute as $attribute => $attributeChanges) {
                 $before = $entry['structure'][$attribute] ?? null;
+                $sameStructure = is_array($before) && self::sameAnchors($before, $this->anchors($attribute));
 
-                if (! is_array($before) || ! self::sameAnchors($before, $this->anchors($attribute))) {
+                // Only a publish request: for the draft as loaded, under the
+                // source as loaded. Otherwise nothing is published; the
+                // editor shows what is stored now.
+                if ($attributeChanges === [] && (! $sameStructure || $this->storedFingerprint($locale, $attribute) !== ($entry['stored'][$attribute] ?? null))) {
+                    continue;
+                }
+
+                if (! $sameStructure) {
                     $conflicts[] = ['locale' => $locale, 'attribute' => $attribute, 'key' => null, 'reason' => TranslationConflictException::STRUCTURE, 'theirs' => null];
 
                     continue;
@@ -1047,35 +1103,30 @@ final class RecordEditor
                     throw $exception;
                 }
 
-                $before = $this->storedFingerprint($locale, $attribute);
-                $complete = count($byPath) === count($attributeSegments);
+                $before = $this->layersFingerprint($locale, $attribute);
 
                 if (! $this->supportsStates()) {
                     // Only single texts here: translated or not.
                     $this->record->setTranslation($attribute, $locale, $value);
-                } elseif ($value === null) {
-                    // Cleared: the draft, if there is one, or else the translation.
-                    $content->draft($locale, $attribute) !== null
-                        ? $this->record->forgetTranslationDraft($attribute, $locale)
-                        : $this->record->setTranslation($attribute, $locale, null);
-                } elseif ($complete) {
-                    $this->record->setTranslation($attribute, $locale, $value)->forgetTranslationDraft($attribute, $locale);
                 } else {
-                    $this->record->setTranslationDraft($attribute, $locale, $value);
-                }
+                    $sources = $this->sourcesAfter($locale, $attribute, $attributeSegments, $byPath, $pending[$locale] ?? [], $reviewed[$locale] ?? []);
 
-                if ($this->supportsStates()) {
-                    $sources = $this->sourcesAfter($locale, $attribute, $attributeSegments, $byPath, $pending[$locale], $reviewed[$locale] ?? []);
-
-                    // Confirming texts as still correct is a change too.
-                    if (($sources ?? []) !== $content->sources($locale, $attribute)) {
-                        $changed[$locale] = true;
+                    if ($value === null) {
+                        // Cleared: the draft, if there is one, or else the translation.
+                        $content->draft($locale, $attribute) !== null
+                            ? $this->record->forgetTranslationDraft($attribute, $locale)
+                            : $this->record->setTranslation($attribute, $locale, null)->setTranslationSource($attribute, $locale, null);
+                    } elseif ($content->publishable($locale, $attribute, $byPath, $sources ?? [])) {
+                        $this->record->setTranslation($attribute, $locale, $value)
+                            ->setTranslationSource($attribute, $locale, $sources)
+                            ->forgetTranslationDraft($attribute, $locale);
+                    } else {
+                        $this->record->setTranslationDraft($attribute, $locale, $value, $sources);
                     }
-
-                    $this->record->setTranslationSource($attribute, $locale, $sources);
                 }
 
-                if ($this->recordFingerprint($locale, $attribute) !== $before) {
+                // Confirming texts as still correct is a change too.
+                if ($this->layersFingerprint($locale, $attribute) !== $before) {
                     $changed[$locale] = true;
                 }
             }
@@ -1085,23 +1136,28 @@ final class RecordEditor
     }
 
     /**
-     * The fingerprint of the pending published value and draft.
+     * The fingerprint of both layers as the record holds them now, pending
+     * changes included: published value, draft and their sources.
      */
-    private function recordFingerprint(string $locale, string $attribute): string
+    private function layersFingerprint(string $locale, string $attribute): string
     {
-        $draft = $this->supportsStates() ? ($this->record->getDirtyTranslationStates()[$locale]['drafts'] ?? []) : [];
+        $record = $this->record;
 
-        return self::fingerprint([
-            $this->record->getTranslation($attribute, $locale),
-            array_key_exists($attribute, $draft) ? $draft[$attribute] : $this->content()->draft($locale, $attribute),
-        ]);
+        return self::fingerprint($this->supportsStates()
+            ? [
+                $record->getTranslation($attribute, $locale),
+                $record->getTranslationSource($attribute, $locale),
+                $record->getTranslationDraft($attribute, $locale),
+                $record->getTranslationDraftSource($attribute, $locale),
+            ]
+            : [$record->getTranslation($attribute, $locale)]);
     }
 
     /**
      * What each translated segment was made from after this save: the
      * current source text for segments the translator wrote or confirmed;
-     * what was recorded before for the others, so a stale translation never
-     * looks current because something else was saved.
+     * what the working copy recorded before for the others, so a stale
+     * translation never looks current because something else was saved.
      *
      * @param  array<string, Segment>  $segments  the attribute's, by key
      * @param  array<string, string>  $texts  translated texts by path
@@ -1240,16 +1296,22 @@ final class RecordEditor
             $content = $this->content();
 
             foreach ($this->attributes() as $attribute) {
-                $texts = $content->alignment($locale, $attribute)->texts;
-                $sources = [];
+                $hashes = [];
 
                 foreach ($content->segments()[$attribute] ?? [] as $segment) {
-                    if (isset($texts[$segment->path])) {
-                        $sources[$segment->path] = $segment->hash();
-                    }
+                    $hashes[$segment->path] = $segment->hash();
                 }
 
-                $this->record->setTranslationSource($attribute, $locale, $sources === [] ? null : $sources);
+                // Both layers: the published translation and the draft.
+                $current = fn (bool $published): ?array => array_intersect_key($hashes, $content->alignment($locale, $attribute, $published)->texts) ?: null;
+
+                $this->record->setTranslationSource($attribute, $locale, $current(true));
+
+                $draft = $content->draft($locale, $attribute);
+
+                if ($draft !== null) {
+                    $this->record->setTranslationDraft($attribute, $locale, $draft, $current(false));
+                }
             }
         });
 

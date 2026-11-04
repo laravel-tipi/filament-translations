@@ -2,7 +2,6 @@
 
 declare(strict_types=1);
 
-use Illuminate\Database\Eloquent\Model;
 use League\CommonMark\GithubFlavoredMarkdownConverter;
 use Tipi\Translations\Filament\Tests\Fixtures\Models\Grape;
 use Tipi\Translations\Filament\Tests\Fixtures\Models\Region;
@@ -19,15 +18,6 @@ beforeEach(function (): void {
     $this->signIn();
     configureEditor(fn (TranslationEditor $e) => $e->page()->comparison());
 });
-
-/**
- * What a reader of the locale gets: the published translation, or the
- * fallback.
- */
-function readerSees(Model $record, string $attribute, string $locale = 'ka'): mixed
-{
-    return $record->fresh()->getTranslation($attribute, $locale, fallback: true);
-}
 
 function markdownHtml(?string $markdown): string
 {
@@ -84,7 +74,7 @@ it('keeps a partial translation as a draft: readers never see gaps', function ()
 
     expect($editor->text('ka', 'tasting/0'))->toBe('არომატი')
         ->and($editor->text('ka', 'tasting/1'))->toBeNull()
-        ->and($editor->html())->toContain(__('tipi-filament-translations::editor.attribute.draft_fallback', ['locale' => 'English']));
+        ->and($editor->html())->toContain(__('tipi-filament-translations::editor.attribute.readers_fallback', ['locale' => 'English']));
 
     // Completing it publishes it and drops the draft.
     $editor->fill('ka', [

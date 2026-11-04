@@ -2,7 +2,7 @@
     $progress = $getProgress();
     $orphans = $getOrphans();
     $unsaved = $getUnsavedTexts();
-    $draft = $getDraftNotice();
+    $draft = $getDraft();
     $stale = $getStaleCount();
     $fallback = $progress['translated'] === 0 && $draft === null ? $getFallbackLocale() : null;
     $source = $getSourceLocale();
@@ -38,9 +38,29 @@
     @endif
 
     @if ($draft !== null)
-        <p class="fi-tipi-tr-notice fi-tipi-tr-notice-muted" role="status">
-            {{ __('tipi-filament-translations::editor.attribute.draft') }} {{ $draft }}
-        </p>
+        <div class="fi-tipi-tr-notice fi-tipi-tr-notice-muted fi-tipi-tr-draft" role="status" data-draft="{{ $draft['status'] }}">
+            <p>
+                <strong>{{ __('tipi-filament-translations::editor.attribute.draft') }}</strong>
+                {{ trans_choice('tipi-filament-translations::editor.attribute.draft_'.$draft['status'], $draft['blocking'], ['count' => $draft['blocking']]) }}
+                {{ $draft['readers'] }}
+            </p>
+
+            @if ($draft['status'] === 'ready')
+                @if ($isPublishRequested())
+                    <p>{{ __('tipi-filament-translations::editor.attribute.publish_requested') }}</p>
+                @else
+                    <x-filament::link
+                        tag="button"
+                        type="button"
+                        size="sm"
+                        :icon="\Filament\Support\Icons\Heroicon::ArrowUpTray"
+                        x-on:click="$wire.set({{ \Illuminate\Support\Js::from($getPublishStatePath()) }}, true)"
+                    >
+                        {{ __('tipi-filament-translations::editor.attribute.publish') }}
+                    </x-filament::link>
+                @endif
+            @endif
+        </div>
     @endif
 
     @if ($stale > 0)

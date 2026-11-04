@@ -8,20 +8,33 @@ use Filament\Forms\Components\Select;
 use Filament\Tables\Filters\Filter;
 use Filament\Tables\Filters\Indicator;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Support\Collection;
+use Illuminate\Support\Collection as BaseCollection;
 use LogicException;
 use Tipi\Support\Locale;
 use Tipi\Translations\Contracts\TranslatableModel;
 use Tipi\Translations\Filament\Editor\RecordEditor;
+use Tipi\Translations\Filament\Enums\TranslationStatus;
 use Tipi\Translations\Filament\Resources\Concerns\Translatable;
+use Tipi\Translations\Filament\Support\LocaleProgress;
+use Tipi\Translations\Filament\Support\TranslationProgress;
 use Tipi\Translations\Filament\TranslationEditor;
 
 /**
- * Filters records by the translation status of one locale: missing,
- * incomplete, complete or, with translation states, outdated. Counts the
- * attributes of the translation form, like the editor and the column.
- * Uses the Translations query scopes, so it works with every storage.
+ * Filters records by the translation status of one locale, exactly as the
+ * column and the editor report it (LocaleProgress): what readers see is
+ * not translated, incomplete or complete; with translation states, also
+ * outdated (marked so, or with published texts whose source text changed
+ * since) and records with unpublished drafts.
+ *
+ * Statuses count segments, which only the content schema can tell, so
+ * they are decided in PHP: an SQL query using the Translations query
+ * scopes (every storage) first narrows the records down to those that can
+ * match, then each candidate's progress is computed, in chunks with its
+ * translations eager loaded, and the table is limited to the matches.
+ * The cost grows with the number of candidates; drafts are found in SQL
+ * alone.
  */
 class TranslationStatusFilter extends Filter
 {
@@ -32,6 +45,13 @@ class TranslationStatusFilter extends Filter
     public const string COMPLETE = 'complete';
 
     public const string OUTDATED = 'outdated';
+
+    public const string DRAFTS = 'drafts';
+
+    /**
+     * Candidates read per query while filtering.
+     */
+    protected int $chunkSize = 200;
 
     protected ?RecordEditor $editor = null;
 
@@ -82,6 +102,7 @@ class TranslationStatusFilter extends Filter
 
         if ($this->getEditor()->supportsStates()) {
             $options[self::OUTDATED] = __('tipi-filament-translations::editor.filter.outdated');
+            $options[self::DRAFTS] = __('tipi-filament-translations::editor.filter.drafts');
         }
 
         return $options;
@@ -93,46 +114,94 @@ class TranslationStatusFilter extends Filter
      */
     public function applyStatus(Builder $query, mixed $locale, mixed $status): Builder
     {
-        if (! is_string($locale) || ! is_string($status) || ! $this->getLocales()->has($locale)) {
+        if (! is_string($locale) || ! is_string($status) || ! $this->getLocales()->has($locale) || ! array_key_exists($status, $this->getStatusOptions())) {
             return $query;
         }
 
-        $attributes = $this->getEditor()->attributes();
-        $source = $this->getEditor()->sourceLocale()->code;
+        if ($status === self::DRAFTS) {
+            return $query->whereHas('translationStates', fn (Builder $query) => $query
+                ->where('locale_code', $locale)
+                ->whereNotNull('drafts'));
+        }
 
-        // Per attribute, in SQL: whether the source has a value, and the
-        // locale too. A partly translated document counts as translated.
+        $candidates = $this->narrow((clone $query)->reorder(), $locale, $status)->withTranslations();
+
+        if ($this->getEditor()->supportsStates()) {
+            $candidates->with('translationStates');
+        }
+
+        $keys = [];
+        $target = $this->getLocales()->only([$locale]);
+        $schema = $this->getEditor()->schema();
+
+        $candidates->chunkById($this->chunkSize, function (Collection $records) use (&$keys, $locale, $status, $target, $schema): void {
+            foreach ($records as $record) {
+                $editor = (new RecordEditor($this->getEditor()->config, $record))->useSchema($schema);
+                $progress = TranslationProgress::of($editor->content(), $target)->locale($locale);
+
+                if ($progress !== null && self::matches($progress, $status)) {
+                    $keys[] = $record->getKey();
+                }
+            }
+        });
+
+        return $query->whereKey($keys);
+    }
+
+    public static function matches(LocaleProgress $progress, string $status): bool
+    {
         return match ($status) {
-            self::COMPLETE => $query->where(function (Builder $query) use ($attributes, $locale, $source): void {
+            self::MISSING => $progress->status() === TranslationStatus::Missing,
+            self::INCOMPLETE => $progress->status() === TranslationStatus::Incomplete,
+            self::COMPLETE => $progress->status() === TranslationStatus::Complete,
+            self::OUTDATED => $progress->isOutdated(),
+            self::DRAFTS => $progress->hasDrafts(),
+            default => false,
+        };
+    }
+
+    /**
+     * Only records that can have the status: conditions every match
+     * meets, in SQL. Published values only, like the status.
+     *
+     * @param  Builder<Model>  $query
+     * @return Builder<Model>
+     */
+    protected function narrow(Builder $query, string $locale, string $status): Builder
+    {
+        $attributes = $this->getEditor()->attributes();
+
+        // A source locale per record can't be narrowed by in SQL.
+        $source = $this->getEditor()->config->hasSourceLocalePerRecord() ? null : $this->getEditor()->sourceLocale()->code;
+
+        // Something to translate: the source has a value.
+        if ($source !== null) {
+            $query->where(function (Builder $query) use ($attributes, $source): void {
+                foreach ($attributes as $attribute) {
+                    $query->orWhere(fn (Builder $query) => $query->whereHasTranslation($attribute, $source));
+                }
+            });
+        }
+
+        return match ($status) {
+            // Every attribute the source has is published.
+            self::COMPLETE => $source === null ? $query : $query->where(function (Builder $query) use ($attributes, $locale, $source): void {
                 foreach ($attributes as $attribute) {
                     $query->where(fn (Builder $query) => $query
                         ->whereDoesntHaveTranslation($attribute, $source)
                         ->orWhere(fn (Builder $query) => $query->whereHasTranslation($attribute, $locale)));
                 }
             }),
-            self::INCOMPLETE => $query->where(function (Builder $query) use ($attributes, $locale, $source): void {
+            // Something is published.
+            self::INCOMPLETE => $query->where(function (Builder $query) use ($attributes, $locale): void {
                 foreach ($attributes as $attribute) {
-                    $query->orWhere(fn (Builder $query) => $query
-                        ->whereHasTranslation($attribute, $source)
-                        ->whereDoesntHaveTranslation($attribute, $locale));
+                    $query->orWhere(fn (Builder $query) => $query->whereHasTranslation($attribute, $locale));
                 }
             }),
-            self::MISSING => $query
-                ->where(function (Builder $query) use ($attributes, $locale): void {
-                    foreach ($attributes as $attribute) {
-                        $query->whereDoesntHaveTranslation($attribute, $locale);
-                    }
-                })
-                ->where(function (Builder $query) use ($attributes, $source): void {
-                    foreach ($attributes as $attribute) {
-                        $query->orWhere(fn (Builder $query) => $query->whereHasTranslation($attribute, $source));
-                    }
-                }),
-            self::OUTDATED => $this->getEditor()->supportsStates()
-                ? $query->whereHas('translationStates', fn (Builder $query) => $query
-                    ->where('locale_code', $locale)
-                    ->whereNotNull('outdated_at'))
-                : $query,
+            // Marked outdated, or published with recorded sources.
+            self::OUTDATED => $query->whereHas('translationStates', fn (Builder $query) => $query
+                ->where('locale_code', $locale)
+                ->where(fn (Builder $query) => $query->whereNotNull('outdated_at')->orWhereNotNull('sources'))),
             default => $query,
         };
     }
@@ -140,9 +209,9 @@ class TranslationStatusFilter extends Filter
     /**
      * The target locales: offered, except the source.
      *
-     * @return Collection<string, Locale>
+     * @return BaseCollection<string, Locale>
      */
-    protected function getLocales(): Collection
+    protected function getLocales(): BaseCollection
     {
         return $this->getEditor()->offeredLocales()->except($this->getEditor()->sourceLocale()->code);
     }

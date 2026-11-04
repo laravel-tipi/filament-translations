@@ -54,6 +54,12 @@
                 {{ $progress->total === 0 ? $progress->status()->getLabel() : __('tipi-filament-translations::editor.panel.progress', ['translated' => $progress->translated, 'total' => $progress->total]) }}
             </x-filament::badge>
 
+            @if ($progress->hasDrafts())
+                <x-filament::badge size="sm" color="gray" :icon="Heroicon::PencilSquare" :tooltip="__('tipi-filament-translations::editor.progress.drafts', ['drafted' => $progress->drafted, 'total' => $progress->total])">
+                    {{ __('tipi-filament-translations::editor.panel.drafted', ['drafted' => $progress->drafted, 'total' => $progress->total]) }}
+                </x-filament::badge>
+            @endif
+
             @if ($progress->isOutdated())
                 <x-filament::badge size="sm" color="warning" :icon="Heroicon::Clock">
                     {{ __('tipi-filament-translations::editor.panel.outdated') }}
@@ -78,7 +84,7 @@
         </div>
     </header>
 
-    @if ($progress->isOutdated())
+    @if ($progress->isMarkedOutdated())
         <p class="fi-tipi-tr-notice" role="status">
             {{ __('tipi-filament-translations::editor.panel.outdated_notice', ['date' => $progress->outdatedSince?->isoFormat('LL')]) }}
         </p>

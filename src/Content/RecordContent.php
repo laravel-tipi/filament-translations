@@ -10,9 +10,10 @@ use Tipi\Translations\Contracts\TranslatableModel;
 
 /**
  * A record's translatable content: the segments of its source locale and
- * the translations lined up with them. A locale's translation is its
- * working copy: the unpublished draft when there is one, else the
- * published value.
+ * the translations lined up with them, in two layers per locale and
+ * attribute: the published value (what readers see) and the working copy
+ * (what translators edit: the unpublished draft when there is one, else
+ * the published value). Each layer has its own sources.
  *
  * The source decides what has to be translated: a segment exists only
  * where the source has text. Values of other locales count only where
@@ -35,7 +36,7 @@ final class RecordContent
     private array $unsupported = [];
 
     /**
-     * @var array<string, array<string, Alignment>> locale => attribute => alignment
+     * @var array<string, array<string, array<string, Alignment>>> locale => attribute => layer => alignment
      */
     private array $alignments = [];
 
@@ -107,7 +108,11 @@ final class RecordContent
         return $this->record->getTranslation($attribute, $this->source);
     }
 
-    public function alignment(string $locale, string $attribute): Alignment
+    /**
+     * The translation lined up with the source: the working copy, or the
+     * published value.
+     */
+    public function alignment(string $locale, string $attribute, bool $published = false): Alignment
     {
         if ($locale === $this->source) {
             $alignment = new Alignment;
@@ -119,23 +124,18 @@ final class RecordContent
             return $alignment;
         }
 
-        return $this->alignments[$locale][$attribute] ??= $this->isUnsupported($attribute)
+        $layer = $published || $this->draft($locale, $attribute) === null ? 'published' : 'draft';
+
+        return $this->alignments[$locale][$attribute][$layer] ??= $this->isUnsupported($attribute)
             ? new Alignment
-            : $this->schema->align($attribute, $this->sourceValue($attribute), $this->working($locale, $attribute));
+            : $this->schema->align($attribute, $this->sourceValue($attribute), $layer === 'draft'
+                ? $this->draft($locale, $attribute)
+                : $this->record->getTranslation($attribute, $locale));
     }
 
     public function supportsDrafts(): bool
     {
         return in_array(HasTranslationStates::class, class_uses_recursive($this->record), true);
-    }
-
-    /**
-     * What translators work on: the unpublished draft, or else the
-     * published translation.
-     */
-    public function working(string $locale, string $attribute): mixed
-    {
-        return $this->draft($locale, $attribute) ?? $this->record->getTranslation($attribute, $locale);
     }
 
     public function draft(string $locale, string $attribute): mixed
@@ -144,38 +144,131 @@ final class RecordContent
     }
 
     /**
-     * The fingerprints of the source texts each translated segment was
-     * made from: segment path => fingerprint.
+     * The fingerprints of the source texts each translated segment of a
+     * layer was made from: segment path => fingerprint.
      *
      * @return array<string, string>
      */
-    public function sources(string $locale, string $attribute): array
+    public function sources(string $locale, string $attribute, bool $published = false): array
     {
-        $sources = $this->supportsDrafts() ? $this->record->getTranslationSource($attribute, $locale) : null;
+        if (! $this->supportsDrafts()) {
+            return [];
+        }
+
+        $sources = ! $published && $this->draft($locale, $attribute) !== null
+            ? $this->record->getTranslationDraftSource($attribute, $locale)
+            : $this->record->getTranslationSource($attribute, $locale);
 
         return is_array($sources) ? array_filter($sources, is_string(...)) : [];
     }
 
     /**
-     * Translated segments whose source text changed since they were
-     * translated: segment path => true. Only segments with a recorded
+     * Translated segments of a layer whose source text changed since they
+     * were translated: segment path => true. Only segments with a recorded
      * fingerprint can be told.
      *
      * @return array<string, true>
      */
-    public function stale(string $locale, string $attribute): array
+    public function stale(string $locale, string $attribute, bool $published = false): array
     {
-        $texts = $this->alignment($locale, $attribute)->texts;
-        $sources = $this->sources($locale, $attribute);
-        $stale = [];
+        return array_fill_keys($this->outdated(
+            $attribute,
+            $this->alignment($locale, $attribute, $published)->texts,
+            $this->sources($locale, $attribute, $published),
+        ), true);
+    }
+
+    /**
+     * Of the given texts (path => text, with their sources), those made
+     * from a source text that changed since.
+     *
+     * @param  array<string, string>  $texts
+     * @param  array<string, string>  $sources
+     * @return list<string> paths
+     */
+    public function outdated(string $attribute, array $texts, array $sources): array
+    {
+        $paths = [];
 
         foreach ($this->segments()[$attribute] ?? [] as $segment) {
             if (isset($texts[$segment->path], $sources[$segment->path]) && $sources[$segment->path] !== $segment->hash()) {
-                $stale[$segment->path] = true;
+                $paths[] = $segment->path;
             }
         }
 
-        return $stale;
+        return $paths;
+    }
+
+    /**
+     * Whether a translation (path => text, with its sources) may be
+     * published: every segment translated, and no outdated text that
+     * readers don't see already. Publishing never shows readers a
+     * translation of an older source text they weren't shown before.
+     *
+     * @param  array<string, string>  $texts
+     * @param  array<string, string>  $sources
+     */
+    public function publishable(string $locale, string $attribute, array $texts, array $sources): bool
+    {
+        return $this->blocking($locale, $attribute, $texts, $sources) === [] && $this->isComplete($attribute, $texts);
+    }
+
+    /**
+     * The outdated texts that keep a translation from being published.
+     *
+     * @param  array<string, string>  $texts
+     * @param  array<string, string>  $sources
+     * @return list<string> paths
+     */
+    public function blocking(string $locale, string $attribute, array $texts, array $sources): array
+    {
+        $published = $this->alignment($locale, $attribute, published: true)->texts;
+
+        return array_values(array_filter(
+            $this->outdated($attribute, $texts, $sources),
+            fn (string $path): bool => trim($published[$path] ?? '') !== trim($texts[$path]),
+        ));
+    }
+
+    /**
+     * @param  array<string, string>  $texts
+     */
+    public function isComplete(string $attribute, array $texts): bool
+    {
+        $segments = $this->segments()[$attribute] ?? [];
+
+        if ($segments === [] || $this->isUnsupported($attribute)) {
+            return false;
+        }
+
+        foreach ($segments as $segment) {
+            if (! isset($texts[$segment->path])) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * Where an attribute's draft stands: null without a draft; else
+     * "incomplete" (texts are missing), "outdated" (complete, but with
+     * outdated texts readers don't see yet) or "ready" (it can be
+     * published as it is: the source changed so that it is complete).
+     */
+    public function draftStatus(string $locale, string $attribute): ?string
+    {
+        if ($this->draft($locale, $attribute) === null) {
+            return null;
+        }
+
+        $texts = $this->alignment($locale, $attribute)->texts;
+
+        return match (true) {
+            ! $this->isComplete($attribute, $texts) => 'incomplete',
+            $this->blocking($locale, $attribute, $texts, $this->sources($locale, $attribute)) !== [] => 'outdated',
+            default => 'ready',
+        };
     }
 
     /**
@@ -205,22 +298,30 @@ final class RecordContent
     }
 
     /**
-     * @return array{translated: int, total: int, review: list<string>, stale: int, drafts: list<string>, unsupported: list<string>}
+     * A locale's progress. Counts describe the published translations,
+     * what readers see; "drafted" counts the working copies, with drafts.
+     *
+     * @return array{translated: int, drafted: int, total: int, review: list<string>, stale: int, drafts: list<string>, unsupported: list<string>}
      */
     public function progress(string $locale): array
     {
         $translated = 0;
+        $drafted = 0;
         $total = 0;
         $stale = 0;
         $review = [];
         $drafts = [];
 
         foreach ($this->segments() as $attribute => $segments) {
-            $total += count($segments);
-            $translated += count(array_intersect_key($this->alignment($locale, $attribute)->texts, array_flip(array_map(fn (Segment $segment): string => $segment->path, $segments))));
-            $stale += count($this->stale($locale, $attribute));
+            $paths = array_flip(array_map(fn (Segment $segment): string => $segment->path, $segments));
+            $published = $this->alignment($locale, $attribute, published: true);
 
-            if ($this->alignment($locale, $attribute)->orphans !== []) {
+            $total += count($segments);
+            $translated += count(array_intersect_key($published->texts, $paths));
+            $drafted += count(array_intersect_key($this->alignment($locale, $attribute)->texts, $paths));
+            $stale += count($this->stale($locale, $attribute, published: true));
+
+            if ($published->orphans !== []) {
                 $review[] = $attribute;
             }
 
@@ -233,7 +334,7 @@ final class RecordContent
         // never left out of completeness unnoticed.
         $unsupported = array_keys($this->unsupported);
 
-        return ['translated' => $translated, 'total' => $total, 'review' => $review, 'stale' => $stale, 'drafts' => $drafts, 'unsupported' => $unsupported];
+        return ['translated' => $translated, 'drafted' => $drafted, 'total' => $total, 'review' => $review, 'stale' => $stale, 'drafts' => $drafts, 'unsupported' => $unsupported];
     }
 
     public function flush(): void

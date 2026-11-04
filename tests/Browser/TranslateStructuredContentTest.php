@@ -152,7 +152,9 @@ it('never shows readers a partial translation, and publishes it once complete', 
         ->fill(segment('description/0~0'), 'კლასიკა')
         ->press('Save translations')
         ->assertSee('Translations saved')
-        ->assertSee('Draft, not published until every text is translated.');
+        ->assertSee('Unpublished draft.')
+        ->assertSee('It is published once every text is translated.')
+        ->assertSee('Readers see English meanwhile.');
 
     // Readers: the Georgian name, and the whole English description. No gaps.
     visit($site)
@@ -173,6 +175,42 @@ it('never shows readers a partial translation, and publishes it once complete', 
         ->assertSeeIn('#description', 'ქვევრში')
         ->assertDontSeeIn('#description', 'A classic')
         ->assertPresent('#description a[href="https://example.com/qvevri"]');
+});
+
+it('shows what readers see apart from the draft, and publishes a draft the source completed on request', function (): void {
+    configureEditor(fn (TranslationEditor $e) => $e->page()->comparison());
+    $notes = [['id' => 'a', 'note' => 'Cherry'], ['id' => 'b', 'note' => 'Plum'], ['id' => 'c', 'note' => 'Oak']];
+    $wine = makeRecord(Wine::class, ['en' => ['notes' => $notes]]);
+    $editor = '/admin/wines/'.$wine->getKey().'/translations?locale=ka';
+
+    visit($editor)
+        ->fill(segment('notes/a/note'), 'ალუბალი')
+        ->fill(segment('notes/b/note'), 'ქლიავი')
+        ->press('Save translations')
+        ->assertSee('Translations saved')
+        ->assertSee('0 of 3 published')
+        ->assertSee('Draft: 2 of 3');
+
+    // The source drops the untranslated item: the draft is complete, but
+    // nothing is published until the translator says so.
+    $wine->fresh()->setTranslation('notes', 'en', array_slice($notes, 0, 2))->save();
+
+    visit('/site/ka/wines/'.$wine->getKey())->assertSeeIn('#notes', 'Cherry');
+
+    visit($editor)
+        ->assertSee('every text is translated now')
+        ->assertSee('Readers see English meanwhile.')
+        ->click('Publish when saving')
+        ->assertSee('Will be published when you save.')
+        ->press('Save translations')
+        ->assertSee('Translations saved')
+        ->assertSee('2 of 2 published')
+        ->assertDontSee('Unpublished draft.')
+        ->assertNoJavaScriptErrors();
+
+    visit('/site/ka/wines/'.$wine->getKey())
+        ->assertSeeIn('#notes', 'ალუბალი')
+        ->assertDontSeeIn('#notes', 'Cherry');
 });
 
 it('flags a translation whose source changed, until it is confirmed', function (): void {

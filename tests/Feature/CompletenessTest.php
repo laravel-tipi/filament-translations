@@ -78,9 +78,14 @@ it('counts segments, so a partly translated document is incomplete', function ()
 
     $progress = progressOf($wine->fresh());
 
-    expect($progress->translated)->toBe(3)
+    // The partly translated tasting notes and notes are drafts: readers
+    // see only the name. The drafts are counted apart.
+    expect($progress->translated)->toBe(1)
+        ->and($progress->drafted)->toBe(3)
         ->and($progress->total)->toBe(6)
-        ->and($progress->fraction())->toBe('3/6');
+        ->and($progress->fraction())->toBe('1/6')
+        ->and($progress->status())->toBe(TranslationStatus::Incomplete)
+        ->and($progress->drafts)->toBe(['tasting', 'notes']);
 });
 
 it('treats content without text as nothing to translate', function (mixed $empty): void {
@@ -152,7 +157,7 @@ it('shows progress and statuses in the editor', function (): void {
     $html = openEditor('page', $wine, 'de')->html();
 
     expect($html)
-        ->toContain('1 of 2 translated')
+        ->toContain('1 of 2 published')
         ->toContain(__('tipi-filament-translations::editor.panel.outdated'))
         ->toContain(__('tipi-filament-translations::editor.row.translated'))
         ->toContain(__('tipi-filament-translations::editor.row.missing'))
@@ -217,7 +222,7 @@ it('shows target locale badges that open the editor at that locale', function ()
     $html = Livewire::test(ListWines::class)->html();
 
     expect($html)
-        ->toContain('Georgian: 1 of 2 translated.')
+        ->toContain('Georgian: 1 of 2 texts published.')
         ->not->toContain('English: ')
         ->toContain("mountAction('translate', JSON.parse('{\\u0022locale\\u0022:\\u0022ka\\u0022}')");
 
@@ -289,7 +294,8 @@ it('filters records by translation status against the source', function (string 
     $filter = fn (string $status) => Livewire::test($list)->filterTable(TranslationStatusFilter::getDefaultName(), ['locale' => 'ka', 'status' => $status]);
 
     $filter('complete')->assertCanSeeTableRecords([$complete, $short])->assertCanNotSeeTableRecords([$partial, $missing]);
-    $filter('incomplete')->assertCanSeeTableRecords([$partial, $missing])->assertCanNotSeeTableRecords([$complete, $short]);
+    // Exactly the column's statuses: not translated isn't incomplete.
+    $filter('incomplete')->assertCanSeeTableRecords([$partial])->assertCanNotSeeTableRecords([$complete, $short, $missing]);
     $filter('missing')->assertCanSeeTableRecords([$missing])->assertCanNotSeeTableRecords([$complete, $short, $partial]);
 })->with([
     'table storage' => [ListWines::class, Wine::class],

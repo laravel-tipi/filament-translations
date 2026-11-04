@@ -19,7 +19,7 @@ class WineResource extends Resource
 
 - **Translators translate text, authors keep the structure.** Plain text, Markdown, rich text, repeaters and builders are split into text segments, each edited in a plain textarea. Formatting and links are numbered tags translators can move (`This is <b1>excellent</b1> wine`), never markup they can break. Items, blocks, URLs, images and settings stay the source's.
 - **Checked reconstruction.** Every translated value is rebuilt from the source's structure and read back; a text the format can't express is refused with a reason, never stored differently.
-- **Completeness from the source.** What the source has text for needs translating, nothing else. Drafts are always saved; progress ("7 of 10") follows the source as it changes.
+- **Completeness from the source.** What the source has text for needs translating, nothing else. Drafts are always saved; progress ("7 of 10 published") follows the source as it changes and describes what readers see, with drafts shown apart.
 - **No lost updates.** Saves merge with what others saved meanwhile (other locales, fields, paragraphs, items) inside one locked transaction, and refuse what overlaps, keeping the translator's text.
 - **Two layouts, three presentations.** The source (or another language) beside the translation, or one locale at a time with tabs or a select; on a page, in a modal or a slide-over.
 - **Status at a glance.** Per-segment, per-locale and per-record progress, outdated translations, table badges and filters.
@@ -171,13 +171,15 @@ A field is **published** only when all of its texts are translated. Until then t
 | The translator saves… | Readers of the locale see | The editor shows |
 |---|---|---|
 | every text of a field | the translation | the translation |
-| some texts of a field that has no translation yet | the fallback (e.g. the English field, whole) | the draft, "Draft, not published" |
-| some texts of an update to a published field | the published translation, unchanged | the draft |
+| some texts of a field that has no translation yet | the fallback (e.g. the English field, whole) | the draft: "Unpublished draft… Readers see English meanwhile." |
+| some texts of an update to a published field | the published translation, unchanged | the draft: "…Readers see the published translation meanwhile (5 of 5 texts)." |
 | completes the draft | the new translation; the draft is gone | the translation |
 | clears every text | a draft cleared: the published translation stays; else the translation is removed | — |
 
 - The draft keeps the source's structure, with untranslated blocks empty, so it lines up with the source when reopened. It is never read as a translation: not by `$model->description`, fallback, queries, the table filter or serialization.
-- Completeness counts the draft's texts (they are real translations); readers' view counts only what is published.
+- Statuses, progress and freshness describe the **published** translation: what readers see. Drafts are reported beside it ("Draft: 6 of 7" in the panel, a pencil on the table badge, "Unpublished drafts: 6 of 7 texts translated" in tooltips) and never count as translated.
+- A save publishes a field only if the result shows readers no outdated text they don't see already (see [Freshness](#freshness)). A complete draft with a text whose source changed since stays a draft until that text is updated or confirmed **Still correct**. Texts readers already see are no obstacle: improving one paragraph of a published translation publishes it even if another paragraph is outdated (it stays flagged).
+- Publishing happens only when a translator saves the field. A change to the source never publishes a draft: when the source drops the only untranslated texts (say, an item is removed), the draft says so and offers **Publish when saving**. Requested for a draft someone else changed since, or whose source changed since, nothing is published.
 - A field with a single text (`TextInput`, `Textarea`) can't be partial: it is published or not. A form with fields of several texts (Markdown, rich text, repeaters, builders) needs `HasTranslationStates` on the model; building the editor without it throws a `LogicException`.
 
 ### Tags
@@ -378,15 +380,18 @@ Completeness is measured against the source's content, segment by segment, when 
 - A segment counts when the source has text for it. An empty or optional source field, an empty Markdown or rich text document (`<p></p>`), whitespace, an item without text and an image without alt text need no translation.
 - Text is any string or number with non-whitespace content; `null`, `false` and arrays are not text.
 - Stored translations that no longer line up with the source (its structure changed) don't count, and the locale is flagged for review.
-- Translations are never required: drafts save, and their progress is shown.
+- Translations are never required: drafts save, and their progress is shown beside the status.
+
+A locale's status describes its published translations, what readers see:
 
 | Locale status | |
 |---|---|
-| **Complete** | Every segment with source text is translated. |
+| **Complete** | Every segment with source text is published. |
 | **Incomplete** | Some are. |
-| **Not translated** | None are. |
+| **Not translated** | None are (drafts don't count). |
 | **Nothing to translate** | The source has no text. |
-| **Outdated** | Translated from source texts that changed since, or marked for review. Independent of completeness. |
+| **Outdated** | Published texts translated from source texts that changed since, or marked for review. Independent of completeness. |
+| **Has drafts** | Unpublished drafts exist. Independent of the rest. |
 
 Per attribute, the editor shows its progress and, while nothing is published, what readers of the content context see instead ("readers see English"). Fallback is never counted as translated, and fields are never filled with fallback text.
 
@@ -398,22 +403,31 @@ Completeness asks whether each source text has a translation; freshness asks whe
 - Each segment is judged on its own: rewording one paragraph or one item flags that text only.
 - Saving other texts never refreshes an outdated one: untouched segments keep the fingerprint they had.
 - The translator updates the text, or confirms it with **Still correct** (saved with the next save), or marks the whole locale **up to date**, which records the current source for every translated text.
-- Drafts are tracked the same way. Texts translated before fingerprints existed, or outside the editor, have none and are never claimed outdated; **Mark as up to date** starts tracking them.
+- The published translation and the draft each have their own fingerprints (a draft's travel with it, Translations' `getTranslationDraftSource()`), so updating a text in a draft doesn't hide that readers still see the outdated one. The editor flags the texts in its fields (the draft's); statuses and the table, the published ones.
+- Texts translated before fingerprints existed have none and are never claimed outdated. A translation written outside the editor (an import, code) loses the fingerprints of the one it replaced, as Translations forgets the source of a translation changed without one. **Mark as up to date** starts tracking them, for the published translation and the draft.
 - A source text that changes while someone is translating it is a save conflict (see [Concurrent editing](#concurrent-editing)).
 
 ### In the editor
 
-The locale navigation shows each locale's progress ("4/6"), an outdated clock and validation errors. The panel header shows the progress and whether the locale is outdated or inactive. Under every segment, whether it is translated, and a **Copy** button for the reference text.
+The locale navigation shows each locale's published progress ("4/6"), an outdated clock and validation errors. The panel header shows the published progress ("4 of 6 published"), the drafts' ("Draft: 5 of 6") and whether the locale is outdated or inactive. Each field with a draft says where the draft stands and what readers see meanwhile. Under every segment, whether it is translated, and a **Copy** button for the reference text.
 
 ### In the table
 
-`TranslationsColumn` shows a compact badge per locale: green when complete, amber when incomplete or outdated, gray when missing, with a tooltip. A badge opens the editor at its locale through the table's `TranslateAction` (by default `translate`; `->translateAction('name')` for another). With more than six locales the column shows one summary badge instead (`->limit(10)` to change it).
+`TranslationsColumn` shows a compact badge per locale: green when complete, amber when incomplete or outdated, gray when missing, with a clock when outdated, a pencil when there are drafts, and a tooltip. A badge opens the editor at its locale through the table's `TranslateAction` (by default `translate`; `->translateAction('name')` for another). With more than six locales the column shows one summary badge instead (`->limit(10)` to change it).
 
 The column eager loads `translations` (and `translationStates`), so it costs no queries per row on any storage.
 
 ### Filtering
 
-`TranslationStatusFilter` filters by a locale's status: not translated, incomplete, complete and, with translation states, outdated. It runs in SQL with the Translations query scopes, so it works on every storage, at the attribute level: an attribute counts as translated when the locale has a value for it and needed when the source has one. A partly translated document counts as translated there; the column and the editor count its segments.
+`TranslationStatusFilter` filters by a locale's status, exactly as the column and the editor report it: not translated, incomplete, complete and, with translation states, outdated (marked, or with outdated published texts) and has drafts.
+
+Statuses count segments, which only the translation form's schema can tell, so the filter decides them in PHP:
+
+1. An SQL query narrows the records down to those that can match, with the Translations query scopes (every storage): the source has a value; for **complete**, every attribute the source has is published; for **incomplete**, something is published; for **outdated**, the locale has a state that is marked or has fingerprints. **Has drafts** is decided in SQL alone.
+2. The candidates are read in chunks of 200 with their translations and states eager loaded, so the number of queries doesn't grow with the rows, and each one's status is computed as the column does.
+3. The table is limited to the matches (`whereKey()`), keeping its other filters, search, sorting and pagination.
+
+The cost grows with the number of candidates: fine for the thousands of records an editorial table holds, not for millions. A source locale per record (`sourceLocale(fn ($record) => …)`) skips the source conditions of step 1.
 
 ### Translation states
 
@@ -422,7 +436,7 @@ With `HasTranslationStates` on the model, the editor's locale menu offers:
 - **Mark as outdated** (a manual flag, e.g. after a change of meaning that isn't in the text) and **Mark as up to date** (clears the flag and confirms every translated text against the current source);
 - **Change status**, when `translations.states.status_enum` is configured.
 
-Publishing a change to a locale clears its manual flag, as Translations does on every save; saving a draft doesn't. The table filter's **Outdated** finds manually flagged locales (SQL); automatic freshness is shown in the column and the editor.
+Publishing a change to a locale clears its manual flag, as Translations does on every save; saving a draft doesn't. The table filter's **Outdated** finds both manually flagged locales and published texts whose source changed.
 
 ## Saving
 
@@ -432,7 +446,7 @@ The editing contract, the same in every presentation and layout:
 2. **Locales load when opened.** Switching locales loads the new one and keeps unsaved texts in the others.
 3. **One save for every changed locale.** **Save** checks and writes every opened locale with changed segments, in one locked transaction. Locales only looked at are neither checked nor saved. The source, other locales and attributes outside the form are never written.
 4. **Structure from the source.** Each changed attribute is rebuilt from the source's current structure with the translated texts, and checked.
-5. **Published when complete.** A field with every text translated is published and its draft forgotten; a partly translated one is saved as a draft (see [Drafts and publishing](#drafts-and-publishing)). The editor never stores empty strings, gaps or the source's text in a published value.
+5. **Published when complete and current.** A field with every text translated, and no outdated text readers don't see already, is published and its draft forgotten; otherwise it is saved as a draft (see [Drafts and publishing](#drafts-and-publishing)). The editor never stores empty strings, gaps or the source's text in a published value.
 6. **Problems keep your input.** A refused text is marked at its segment with the reason; the navigation marks locales with errors.
 
 On the page, leaving with unsaved changes asks for confirmation (with the panel's `unsavedChangesAlerts()`); switching locales or the reference isn't a change.

@@ -8,7 +8,7 @@
 <div {{ $attributes->merge($getExtraAttributes(), escape: false)->class(['fi-tipi-tr-column']) }}>
     @if (count($items) > $limit)
         @php
-            $complete = collect($items)->filter(fn (array $item): bool => $item['progress']->missing() === 0)->count();
+            $complete = collect($items)->filter(fn (array $item): bool => $item['progress']->status() === \Tipi\Translations\Filament\Enums\TranslationStatus::Complete)->count();
             $outdated = collect($items)->filter(fn (array $item): bool => $item['progress']->isOutdated())->count();
             $link = $getLink($getRecord(), null);
             $tooltip = collect($items)->map(fn (array $item): string => $item['progress']->summary())->implode("\n");
@@ -35,7 +35,7 @@
                     <x-filament::badge
                         size="sm"
                         :color="$progress->color()"
-                        :icon="$progress->isOutdated() ? Heroicon::Clock : null"
+                        :icon="$progress->isOutdated() ? Heroicon::Clock : ($progress->hasDrafts() ? Heroicon::PencilSquare : null)"
                         :tooltip="$progress->summary()"
                         :tag="$item['href'] ? 'a' : ($item['click'] ? 'button' : 'span')"
                         :href="$item['href']"

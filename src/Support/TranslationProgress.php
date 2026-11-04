@@ -13,7 +13,7 @@ use Tipi\Translations\Filament\Content\RecordContent;
 /**
  * The translation progress of a record in each target locale. Derived
  * from the stored content when read, never stored: it stays right when
- * the source changes.
+ * the source changes. Describes what readers see (see LocaleProgress).
  */
 final readonly class TranslationProgress
 {
@@ -45,6 +45,7 @@ final readonly class TranslationProgress
                 locale: $locale,
                 translated: $progress['translated'],
                 total: $progress['total'],
+                drafted: $progress['drafted'],
                 hasValues: array_intersect_key($stored[$locale->code] ?? [], $attributes) !== [],
                 review: $progress['review'],
                 stale: $progress['stale'],
