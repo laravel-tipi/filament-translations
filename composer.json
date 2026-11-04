@@ -26,6 +26,7 @@
         "league/commonmark": "^2.7"
     },
     "require-dev": {
+        "laravel-tipi/filament-localization": "^0.2",
         "laravel/pint": "^1.32",
         "orchestra/testbench": "^11.3",
         "pestphp/pest": "^5.3",

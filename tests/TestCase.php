@@ -21,8 +21,10 @@ use Illuminate\Support\Facades\Schema;
 use Livewire\LivewireServiceProvider;
 use Orchestra\Testbench\TestCase as Orchestra;
 use RyanChandler\BladeCaptureDirective\BladeCaptureDirectiveServiceProvider;
+use StijnVanouplines\BladeCountryFlags\BladeCountryFlagsServiceProvider;
 use Tipi\Localization\Actions\CreateLocale;
 use Tipi\Localization\Data\CreateLocaleData;
+use Tipi\Localization\Filament\FilamentLocalizationServiceProvider;
 use Tipi\Localization\LocaleContexts;
 use Tipi\Localization\LocaleRegistry;
 use Tipi\Localization\LocalizationServiceProvider;
@@ -36,6 +38,7 @@ use Tipi\Translations\Filament\Tests\Fixtures\Models\Wine;
 use Tipi\Translations\Filament\Tests\Fixtures\PartnersPanelProvider;
 use Tipi\Translations\Filament\Tests\Fixtures\PublicSite;
 use Tipi\Translations\Filament\Tests\Fixtures\RegionPolicy;
+use Tipi\Translations\Filament\Tests\Fixtures\TranslatorsPanelProvider;
 use Tipi\Translations\Filament\Tests\Fixtures\WinePolicy;
 use Tipi\Translations\TranslationsServiceProvider;
 
@@ -49,7 +52,9 @@ use Tipi\Translations\TranslationsServiceProvider;
  * is published; "admin" (en, ka; default ka) is the admin panel's
  * interface context.
  *
- * Panels: "admin" at /admin (context "admin"), "partners" at /partners.
+ * Panels: "admin" at /admin (context "admin"), "partners" at /partners,
+ * "translators" at /translators (context "admin", through the Filament
+ * Localization plugin).
  */
 abstract class TestCase extends Orchestra
 {
@@ -72,8 +77,11 @@ abstract class TestCase extends Orchestra
             LocalizationServiceProvider::class,
             TranslationsServiceProvider::class,
             FilamentTranslationsServiceProvider::class,
+            BladeCountryFlagsServiceProvider::class,
+            FilamentLocalizationServiceProvider::class,
             AdminPanelProvider::class,
             PartnersPanelProvider::class,
+            TranslatorsPanelProvider::class,
         ];
     }
 
