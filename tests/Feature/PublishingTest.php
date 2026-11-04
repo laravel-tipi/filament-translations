@@ -337,6 +337,19 @@ it('filters exactly what the column reports', function (): void {
     }
 });
 
+it('finds drafts only of the attributes the editor translates, like the column', function (): void {
+    $wine = makeRecord(Wine::class, ['en' => ['name' => 'Saperavi']]);
+
+    // Not in the translation form: the editor doesn't show it.
+    $wine->setTranslationDraft('internal_code', 'ka', 'SAP-1')->save();
+
+    expect(TranslationStatusFilter::matches(readersProgress($wine->fresh()), TranslationStatusFilter::DRAFTS))->toBeFalse();
+
+    Livewire::test(ListWines::class)
+        ->filterTable(TranslationStatusFilter::getDefaultName(), ['locale' => 'ka', 'status' => TranslationStatusFilter::DRAFTS])
+        ->assertCanNotSeeTableRecords([$wine]);
+});
+
 it('filters with a constant number of queries', function (): void {
     $count = function (int $records): int {
         Wine::query()->delete();

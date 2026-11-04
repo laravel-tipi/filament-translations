@@ -33,8 +33,7 @@ use Tipi\Translations\Filament\TranslationEditor;
  * scopes (every storage) first narrows the records down to those that can
  * match, then each candidate's progress is computed, in chunks with its
  * translations eager loaded, and the table is limited to the matches.
- * The cost grows with the number of candidates; drafts are found in SQL
- * alone.
+ * The cost grows with the number of candidates.
  */
 class TranslationStatusFilter extends Filter
 {
@@ -118,12 +117,6 @@ class TranslationStatusFilter extends Filter
             return $query;
         }
 
-        if ($status === self::DRAFTS) {
-            return $query->whereHas('translationStates', fn (Builder $query) => $query
-                ->where('locale_code', $locale)
-                ->whereNotNull('drafts'));
-        }
-
         $candidates = $this->narrow((clone $query)->reorder(), $locale, $status)->withTranslations();
 
         if ($this->getEditor()->supportsStates()) {
@@ -174,8 +167,9 @@ class TranslationStatusFilter extends Filter
         // A source locale per record can't be narrowed by in SQL.
         $source = $this->getEditor()->config->hasSourceLocalePerRecord() ? null : $this->getEditor()->sourceLocale()->code;
 
-        // Something to translate: the source has a value.
-        if ($source !== null) {
+        // Something to translate: the source has a value. Drafts can
+        // outlive the source text they were made from.
+        if ($source !== null && $status !== self::DRAFTS) {
             $query->where(function (Builder $query) use ($attributes, $source): void {
                 foreach ($attributes as $attribute) {
                     $query->orWhere(fn (Builder $query) => $query->whereHasTranslation($attribute, $source));
@@ -202,6 +196,10 @@ class TranslationStatusFilter extends Filter
             self::OUTDATED => $query->whereHas('translationStates', fn (Builder $query) => $query
                 ->where('locale_code', $locale)
                 ->where(fn (Builder $query) => $query->whereNotNull('outdated_at')->orWhereNotNull('sources'))),
+            // Drafts of any attribute: the editor's are decided per record.
+            self::DRAFTS => $query->whereHas('translationStates', fn (Builder $query) => $query
+                ->where('locale_code', $locale)
+                ->whereNotNull('drafts')),
             default => $query,
         };
     }

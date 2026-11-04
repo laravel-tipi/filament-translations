@@ -128,13 +128,16 @@ it('opens the target and reference locales from the query string, and ignores un
 it('deletes a translation from the editor', function (string $presentation, Closure $editor): void {
     configureEditor($editor);
 
-    $wine = makeRecord(Wine::class, ['en' => ['name' => 'Saperavi'], 'ka' => ['name' => 'საფერავი']]);
+    $wine = makeRecord(Wine::class, ['en' => ['name' => 'Saperavi', 'tasting' => 'Dark.'], 'ka' => ['name' => 'საფერავი']]);
+    $wine->setTranslationDraft('tasting', 'ka', 'მუქი.')->save();
 
     $editor = openEditor($presentation, $wine, 'ka');
     $editor->livewire->callAction(TestAction::make('deleteTranslation')->schemaComponent('tipi-translation-panel-ka', schema: $presentation === 'page' ? 'form' : 'mountedActionSchema0'));
 
     expect($wine->fresh()->getTranslatedLocales())->toBe(['en'])
-        ->and($editor->text('ka', 'name'))->toBeNull();
+        ->and($editor->text('ka', 'name'))->toBeNull()
+        // Nothing is left of the locale: no draft, no state.
+        ->and($wine->fresh()->getTranslationState('ka'))->toBeNull();
 })->with([
     'page' => ['page', fn (TranslationEditor $e) => $e->page()],
 ]);
