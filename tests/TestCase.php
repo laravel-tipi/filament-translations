@@ -18,6 +18,7 @@ use Filament\Tables\TablesServiceProvider;
 use Filament\Widgets\WidgetsServiceProvider;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\Schema;
+use Livewire\ComponentHookRegistry;
 use Livewire\LivewireServiceProvider;
 use Orchestra\Testbench\TestCase as Orchestra;
 use RyanChandler\BladeCaptureDirective\BladeCaptureDirectiveServiceProvider;
@@ -64,7 +65,6 @@ abstract class TestCase extends Orchestra
             BladeCaptureDirectiveServiceProvider::class,
             BladeHeroiconsServiceProvider::class,
             BladeIconsServiceProvider::class,
-            LivewireServiceProvider::class,
             SupportServiceProvider::class,
             ActionsServiceProvider::class,
             FormsServiceProvider::class,
@@ -74,6 +74,10 @@ abstract class TestCase extends Orchestra
             TablesServiceProvider::class,
             WidgetsServiceProvider::class,
             FilamentServiceProvider::class,
+            // After Filament, as package discovery orders them in an app:
+            // Livewire wires up the component hooks registered before it
+            // boots, Filament's partial rendering among them.
+            LivewireServiceProvider::class,
             LocalizationServiceProvider::class,
             TranslationsServiceProvider::class,
             FilamentTranslationsServiceProvider::class,
@@ -146,6 +150,18 @@ abstract class TestCase extends Orchestra
         $this->loadMigrationsFrom(dirname(__DIR__).'/vendor/laravel-tipi/localization/database/migrations');
         $this->loadMigrationsFrom(dirname(__DIR__).'/vendor/laravel-tipi/translations/database/migrations');
         $this->loadMigrationsFrom(__DIR__.'/Fixtures/migrations');
+    }
+
+    /**
+     * Every test boots like a new request: without the Livewire component
+     * hooks a previous test's application registered. (They're static, so
+     * they would otherwise mask hooks this application fails to wire up.)
+     */
+    protected function refreshApplication(): void
+    {
+        (fn () => static::$componentHooks = [])->bindTo(null, ComponentHookRegistry::class)();
+
+        parent::refreshApplication();
     }
 
     protected function setUp(): void
