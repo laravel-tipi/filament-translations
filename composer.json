@@ -1,68 +1,115 @@
 {
-  "name": "laravel-tipi/filament-translations",
-  "description": "Filament integration for laravel-tipi/translations",
-  "keywords": [
-    "laravel",
-    "filament",
-    "translations",
-    "localization",
-    "i18n"
-  ],
-  "type": "library",
-  "license": "MIT",
-  "authors": [
-    {
-      "name": "Irakli",
-      "email": "iraklikevkhishvili@gmail.com"
+    "name": "laravel-tipi/filament-translations",
+    "description": "Translation editors for Filament: side-by-side comparison or locale tabs, on a page or in a modal, for laravel-tipi/translations models.",
+    "keywords": [
+        "laravel",
+        "filament",
+        "translations",
+        "localization",
+        "i18n"
+    ],
+    "type": "library",
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "Irakli",
+            "email": "iraklikevkhishvili@gmail.com"
+        }
+    ],
+    "require": {
+        "php": "^8.5",
+        "ext-dom": "*",
+        "filament/filament": "^5.10",
+        "laravel-tipi/localization": "^0.2",
+        "laravel-tipi/support": "^1.0.12",
+        "laravel-tipi/translations": "^0.3",
+        "league/commonmark": "^2.7"
+    },
+    "require-dev": {
+        "laravel-tipi/filament-localization": "^0.2",
+        "laravel/pint": "^1.32",
+        "orchestra/testbench": "^11.3",
+        "pestphp/pest": "^5.3",
+        "pestphp/pest-plugin-browser": "^5.2",
+        "pestphp/pest-plugin-laravel": "^5.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "Tipi\\Translations\\Filament\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Tipi\\Translations\\Filament\\Tests\\": "tests/"
+        }
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "Tipi\\Translations\\Filament\\FilamentTranslationsServiceProvider"
+            ]
+        }
+    },
+    "scripts": {
+        "test": "pest --exclude-testsuite=Browser",
+        "test:mysql": [
+            "Composer\\Config::disableProcessTimeout",
+            "@putenv TRANSLATIONS_TEST_DB=mysql",
+            "@putenv TRANSLATIONS_TEST_DB_HOST=127.0.0.1",
+            "@putenv TRANSLATIONS_TEST_DB_PORT=33061",
+            "@putenv TRANSLATIONS_TEST_DB_PASSWORD=secret",
+            "pest --exclude-testsuite=Browser"
+        ],
+        "test:mariadb": [
+            "Composer\\Config::disableProcessTimeout",
+            "@putenv TRANSLATIONS_TEST_DB=mariadb",
+            "@putenv TRANSLATIONS_TEST_DB_HOST=127.0.0.1",
+            "@putenv TRANSLATIONS_TEST_DB_PORT=33062",
+            "@putenv TRANSLATIONS_TEST_DB_PASSWORD=secret",
+            "pest --exclude-testsuite=Browser"
+        ],
+        "test:pgsql": [
+            "Composer\\Config::disableProcessTimeout",
+            "@putenv TRANSLATIONS_TEST_DB=pgsql",
+            "@putenv TRANSLATIONS_TEST_DB_HOST=127.0.0.1",
+            "@putenv TRANSLATIONS_TEST_DB_PORT=33063",
+            "@putenv TRANSLATIONS_TEST_DB_PASSWORD=secret",
+            "pest --exclude-testsuite=Browser"
+        ],
+        "test:browser": [
+            "Composer\\Config::disableProcessTimeout",
+            "@php vendor/bin/testbench filament:assets --ansi",
+            "pest --testsuite=Browser"
+        ],
+        "format": "pint",
+        "format:test": "pint --test",
+        "check": [
+            "@format:test",
+            "@test"
+        ],
+        "check:all": [
+            "@format:test",
+            "@test",
+            "@test:browser"
+        ]
+    },
+    "config": {
+        "sort-packages": true,
+        "allow-plugins": {
+            "pestphp/pest-plugin": true
+        }
+    },
+    "support": {
+        "issues": "https://github.com/laravel-tipi/filament-translations/issues",
+        "source": "https://github.com/laravel-tipi/filament-translations"
+    },
+    "scripts-descriptions": {
+        "test": "Run the unit and feature tests.",
+        "test:browser": "Publish Filament's assets and run the browser tests (needs: npm install && npx playwright install chromium).",
+        "check": "Check formatting and run the unit and feature tests.",
+        "check:all": "Check formatting and run every test, browser tests included.",
+        "test:pgsql": "Run the unit and feature tests on PostgreSQL (laravel-tipi/translations compose.yaml services).",
+        "test:mysql": "Run the unit and feature tests on MySQL.",
+        "test:mariadb": "Run the unit and feature tests on MariaDB."
     }
-  ],
-  "require": {
-    "php": "^8.5",
-    "filament/filament": "^5.10",
-    "laravel-tipi/support": "^1.0",
-    "laravel-tipi/translations": "^0.1.20",
-    "stijnvanouplines/blade-country-flags": "^1.0.9"
-  },
-  "require-dev": {
-    "laravel/pint": "^1.32",
-    "orchestra/testbench": "^11.3",
-    "pestphp/pest": "^5.3",
-    "pestphp/pest-plugin-laravel": "^5.0"
-  },
-  "autoload": {
-    "psr-4": {
-      "Tipi\\Translations\\Filament\\": "src/"
-    }
-  },
-  "autoload-dev": {
-    "psr-4": {
-      "Tipi\\Translations\\Filament\\Tests\\": "tests/"
-    }
-  },
-  "extra": {
-    "laravel": {
-      "providers": [
-        "Tipi\\Translations\\Filament\\FilamentTranslationsServiceProvider"
-      ]
-    }
-  },
-  "scripts": {
-    "test": "pest",
-    "format": "pint",
-    "format:test": "pint --test",
-    "check": [
-      "@format:test",
-      "@test"
-    ]
-  },
-  "config": {
-    "sort-packages": true,
-    "allow-plugins": {
-      "pestphp/pest-plugin": true
-    }
-  },
-  "support": {
-    "issues": "https://github.com/laravel-tipi/filament-translations/issues",
-    "source": "https://github.com/laravel-tipi/filament-translations"
-  }
 }

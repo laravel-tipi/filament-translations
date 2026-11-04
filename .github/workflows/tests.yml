@@ -31,5 +31,6 @@ jobs:
       - name: Check formatting
         run: composer format:test
 
+      # Browser tests need Playwright: run them locally with composer test:browser.
       - name: Run tests
-        run: vendor/bin/pest
+        run: composer test
