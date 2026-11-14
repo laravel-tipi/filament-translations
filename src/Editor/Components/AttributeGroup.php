@@ -124,10 +124,11 @@ final class AttributeGroup extends Component
 
     /**
      * When the attribute has an unpublished draft: where it stands
-     * (RecordContent::draftStatus()), what readers see meanwhile, and how
-     * many of its texts block publishing.
+     * (RecordContent::draftStatus()), the notice that explains it (for an
+     * attribute published partially or not), what readers see meanwhile,
+     * and how many of its texts block publishing.
      *
-     * @return array{status: string, readers: string, blocking: int}|null
+     * @return array{status: string, message: string, readers: string, blocking: int}|null
      */
     public function getDraft(): ?array
     {
@@ -143,6 +144,7 @@ final class AttributeGroup extends Component
 
         return [
             'status' => $status,
+            'message' => $content->isPartiallyPublishable($locale, $this->attribute) ? 'draft_partial_'.$status : 'draft_'.$status,
             'readers' => $this->getReadersSee(),
             'blocking' => count($content->blocking($locale, $this->attribute, $texts, $content->sources($locale, $this->attribute))),
         ];

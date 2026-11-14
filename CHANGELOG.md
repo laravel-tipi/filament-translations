@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Partial publishing, opt-in: `TranslationEditor::partialPublishing(bool|Closure $condition = true)`, per record and attribute with a closure (`hasPartialPublishing()` reads it). A save publishes each translated plain text of an attribute it changes, at any depth, over what is published; documents (Markdown, rich text) are published once complete. Texts a save doesn't publish or clear are kept with their fingerprints; outdated texts readers don't see yet stay in the draft, which is kept only while some of the work isn't published. When the published translation has texts the source holds in another structure, the attribute is published only once complete. Off by default: nothing changes without it.
+
 ## 0.2.0
 
 A new package, built on `laravel-tipi/translations` 0.3 and `laravel-tipi/localization` 0.2:

@@ -30,7 +30,7 @@ class WineResource extends Resource
 - [Requirements](#requirements) · [Installation](#installation)
 - [Minimal setup](#minimal-setup)
 - [The translation form](#the-translation-form): declaring content, supported fields
-- [Translating text](#translating-text): segments, drafts and publishing, tags, placeholders, items, what is translated
+- [Translating text](#translating-text): segments, drafts and publishing, partial publishing, tags, placeholders, items, what is translated
 - [Choosing an editor](#choosing-an-editor): presentation, layout, navigation, the four combinations
 - [Panel defaults and overrides](#panel-defaults-and-overrides)
 - [Locales and contexts](#locales-and-contexts)
@@ -181,6 +181,29 @@ A field is **published** only when all of its texts are translated. Until then t
 - A save publishes a field only if the result shows readers no outdated text they don't see already (see [Freshness](#freshness)). A complete draft with a text whose source changed since stays a draft until that text is updated or confirmed **Still correct**. Texts readers already see are no obstacle: improving one paragraph of a published translation publishes it even if another paragraph is outdated (it stays flagged).
 - Publishing happens only when a translator saves the field. A change to the source never publishes a draft: when the source drops the only untranslated texts (say, an item is removed), the draft says so and offers **Publish when saving**. Requested for a draft someone else changed since, or whose source changed since, nothing is published.
 - A field with a single text (`TextInput`, `Textarea`) can't be partial: it is published or not. A form with fields of several texts (Markdown, rich text, repeaters, builders) needs `HasTranslationStates` on the model; building the editor without it throws a `LogicException`.
+
+### Partial publishing
+
+Some content is better published text by text: a page whose fields and items each fall back to the source on their own, say. It is off by default; turn it on for the editor, or per record and attribute (the closure receives both):
+
+```php
+public static function translationEditor(TranslationEditor $editor): TranslationEditor
+{
+    return $editor->partialPublishing();
+    // or: ->partialPublishing(fn (Page $page, string $attribute): bool => $attribute === 'content');
+}
+```
+
+A save then publishes, of each attribute it changes, every **unit** that may be published, over what is published already:
+
+- A unit is a plain text (`TextInput`, `Textarea`, at any depth: nested fields, repeater and builder items), or a whole document (Markdown, rich text). A document is published only once all of its texts are translated: readers never see a document with gaps.
+- A unit may be published when it is translated and shows readers no outdated text they don't see already, as above. An outdated text stays in the draft until it is updated or confirmed **Still correct**.
+- Untranslated texts are missing from the published value (`null` in their place), never the source's text: show them with your own fallback. Status and progress count them as missing ("Incomplete, 4/6").
+- What a save doesn't publish or clear is kept: published texts it didn't change stay, with their fingerprints, so an outdated text stays published and flagged. A text is removed only when the translator clears it (a document, when all of its texts are cleared).
+- A draft is kept only while some of the translator's work isn't published (an incomplete document, an outdated text), and forgotten when readers have all of it. Drafts saved before partial publishing was turned on are published, as far as they may be, by the next save of their attribute or on request (**Publish when saving**).
+- Items keep their translations by id, as always: the published value follows the source's items and order. Like any publishing save, a save of the attribute rebuilds it from the source: texts of items the source removed, and of source texts it emptied, are dropped then (until that save they stay as stored, listed in the editor).
+- When what is published has texts the source still has a place for, but in another structure (a document whose blocks changed, an item whose other data changed), publishing partially would drop them: the attribute is then published only once complete, as without partial publishing. The editor lists those texts.
+- Saves merge with concurrent changes and detect conflicts as usual, text by text. Like drafts, it relies on `HasTranslationStates`.
 
 ### Tags
 
@@ -354,6 +377,7 @@ The editor's methods:
 | `placeholders(?array $patterns)` | The placeholders translations must keep. |
 | `itemKey(?string $key)` | The id field of repeater and builder items (`id`). |
 | `customBlocks(array $blocks)` | The text config keys of rich editor custom blocks, by block id. |
+| `partialPublishing(bool\|Closure $condition = true)` | Publish text by text instead of complete attributes only; a closure receives the record and the attribute. See [Partial publishing](#partial-publishing). |
 | `form(Closure $form)` | The form, for records outside a translatable resource. |
 
 ## Locales and contexts
@@ -446,7 +470,7 @@ The editing contract, the same in every presentation and layout:
 2. **Locales load when opened.** Switching locales loads the new one and keeps unsaved texts in the others.
 3. **One save for every changed locale.** **Save** checks and writes every opened locale with changed segments, in one locked transaction. Locales only looked at are neither checked nor saved. The source, other locales and attributes outside the form are never written.
 4. **Structure from the source.** Each changed attribute is rebuilt from the source's current structure with the translated texts, and checked.
-5. **Published when complete and current.** A field with every text translated, and no outdated text readers don't see already, is published and its draft forgotten; otherwise it is saved as a draft (see [Drafts and publishing](#drafts-and-publishing)). The editor never stores empty strings, gaps or the source's text in a published value.
+5. **Published when complete and current.** A field with every text translated, and no outdated text readers don't see already, is published and its draft forgotten; otherwise it is saved as a draft (see [Drafts and publishing](#drafts-and-publishing)). With [partial publishing](#partial-publishing), each text and complete document that may be published is, and the rest is a draft. The editor never stores empty strings, the source's text or a document with gaps in a published value.
 6. **Problems keep your input.** A refused text is marked at its segment with the reason; the navigation marks locales with errors.
 
 On the page, leaving with unsaved changes asks for confirmation (with the panel's `unsavedChangesAlerts()`); switching locales or the reference isn't a change.

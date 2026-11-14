@@ -48,6 +48,7 @@ final readonly class DocumentNode implements Node
                     $run->tags,
                     $run->multiline,
                     rich: $run->tags !== [] || ! in_array($run->role, ['alt', 'title', 'block_field'], true),
+                    document: $path,
                 );
             }
         }
@@ -79,6 +80,11 @@ final readonly class DocumentNode implements Node
             foreach ($target->runs() as $run) {
                 if ($run->hasText()) {
                     $alignment->orphans[] = $run->text();
+
+                    // The source still has the document, in another structure.
+                    if ($source !== null) {
+                        $alignment->restructured[] = $run->text();
+                    }
                 }
             }
 
@@ -98,6 +104,7 @@ final readonly class DocumentNode implements Node
 
             if ($tree === null) {
                 $alignment->orphans[] = $run->text();
+                $alignment->restructured[] = $run->text();
             } else {
                 $alignment->texts[Alignment::join($path, (string) $runPath)] = Inline::render($tree);
             }

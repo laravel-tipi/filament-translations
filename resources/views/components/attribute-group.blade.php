@@ -41,7 +41,7 @@
         <div class="fi-tipi-tr-notice fi-tipi-tr-notice-muted fi-tipi-tr-draft" role="status" data-draft="{{ $draft['status'] }}">
             <p>
                 <strong>{{ __('tipi-filament-translations::editor.attribute.draft') }}</strong>
-                {{ trans_choice('tipi-filament-translations::editor.attribute.draft_'.$draft['status'], $draft['blocking'], ['count' => $draft['blocking']]) }}
+                {{ trans_choice('tipi-filament-translations::editor.attribute.'.$draft['message'], $draft['blocking'], ['count' => $draft['blocking']]) }}
                 {{ $draft['readers'] }}
             </p>
 

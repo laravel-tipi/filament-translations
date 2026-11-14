@@ -21,6 +21,7 @@ final readonly class Segment
      * @param  array<string, TagInfo>  $tags
      * @param  bool  $rich  whether tags are read from translations
      * @param  array{min?: int, max?: int}  $length
+     * @param  string|null  $document  the path of the document (Markdown, rich text) the segment is a run of; null for plain text
      */
     public function __construct(
         public string $attribute,
@@ -32,6 +33,7 @@ final readonly class Segment
         public bool $multiline = true,
         public bool $rich = false,
         public array $length = [],
+        public ?string $document = null,
     ) {}
 
     public function id(): string

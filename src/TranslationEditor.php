@@ -74,6 +74,11 @@ final class TranslationEditor
     private array $customBlocks = [];
 
     /**
+     * @var bool|Closure(Model, string): bool
+     */
+    private bool|Closure $partialPublishing = false;
+
+    /**
      * A new editor with the current panel's defaults applied.
      */
     public static function make(): self
@@ -282,6 +287,32 @@ final class TranslationEditor
         return $this;
     }
 
+    /**
+     * Publish translations text by text, instead of only once an
+     * attribute is completely translated. Readers get each plain text as
+     * soon as it is translated, and null in its place while it isn't: show
+     * missing texts with your own fallback, field by field.
+     *
+     * Documents (Markdown, rich text) are still published whole, once all
+     * of their texts are translated, and texts translated from a source
+     * text that changed since are never shown before they are updated or
+     * confirmed. What can't be published yet stays in a draft. A closure
+     * can decide per record and attribute.
+     *
+     *     $editor->partialPublishing(fn (Page $page, string $attribute): bool => $attribute === 'content');
+     *
+     * Attributes with several texts need translation states
+     * (HasTranslationStates) for their drafts.
+     *
+     * @param  bool|Closure(Model, string): bool  $condition
+     */
+    public function partialPublishing(bool|Closure $condition = true): self
+    {
+        $this->partialPublishing = $condition;
+
+        return $this;
+    }
+
     public function getPresentation(): EditorPresentation
     {
         return $this->presentation;
@@ -359,6 +390,16 @@ final class TranslationEditor
     public function getCustomBlocks(): array
     {
         return $this->customBlocks;
+    }
+
+    /**
+     * Whether the record's attribute is published text by text.
+     */
+    public function hasPartialPublishing(Model $record, string $attribute): bool
+    {
+        return $this->partialPublishing instanceof Closure
+            ? (bool) ($this->partialPublishing)($record, $attribute)
+            : $this->partialPublishing;
     }
 
     /**

@@ -102,7 +102,8 @@ final readonly class ItemsNode implements Node
             }
 
             if ($this->itemSkeleton($candidate) !== $this->itemSkeleton($item)) {
-                $this->orphan($candidate, $alignment);
+                // The source still has the item, with other data.
+                $this->orphan($candidate, $alignment, restructured: true);
 
                 continue;
             }
@@ -241,13 +242,17 @@ final readonly class ItemsNode implements Node
         return array_map(self::sorted(...), $value);
     }
 
-    private function orphan(mixed $item, Alignment $alignment): void
+    private function orphan(mixed $item, Alignment $alignment, bool $restructured = false): void
     {
         [$node, $data] = $this->shape($item);
 
         try {
             foreach ($node?->segments('', '', [], $data) ?? [] as $segment) {
                 $alignment->orphans[] = $segment->text;
+
+                if ($restructured) {
+                    $alignment->restructured[] = $segment->text;
+                }
             }
         } catch (UnsupportedContent) {
             // Nested items without ids: nothing to show.

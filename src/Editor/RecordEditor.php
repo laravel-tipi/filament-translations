@@ -77,6 +77,10 @@ use Tipi\Translations\Filament\TranslationEditor;
  *   when the result is complete and shows readers no outdated text they
  *   didn't see before; otherwise it saves a draft. A draft that became
  *   complete because the source changed is published only on request.
+ * - With partial publishing, a save publishes each plain text and each
+ *   complete document of an attribute it changes that shows readers no
+ *   outdated text they didn't see before, over what is published; the
+ *   rest stays in a draft (RecordContent::partialPublication()).
  * - Locale codes, segment keys and texts in the state are never trusted:
  *   only offered, authorized locales and the source's segments are
  *   written, checked again on the server.
@@ -356,7 +360,12 @@ final class RecordEditor
 
     public function content(): RecordContent
     {
-        return $this->content ??= new RecordContent($this->record, $this->schema(), $this->sourceLocale()->code);
+        return $this->content ??= new RecordContent(
+            $this->record,
+            $this->schema(),
+            $this->sourceLocale()->code,
+            fn (string $attribute): bool => $this->config->hasPartialPublishing($this->record, $attribute),
+        );
     }
 
     /**
@@ -988,9 +997,10 @@ final class RecordEditor
      * complete and shows readers no outdated text they didn't see before
      * (RecordContent::publishable()); otherwise it is saved as a draft, so
      * readers keep seeing the published translation or the fallback, never
-     * gaps or a translation of an older source text. Attributes in
-     * $publish are written without changes: their draft is published when
-     * it still may be.
+     * gaps or a translation of an older source text. Published partially,
+     * the units of the result that may be published are, and the rest is a
+     * draft (writePartially()). Attributes in $publish are written without
+     * changes: their draft is published when it still may be.
      *
      * @param  array<string, array<string, string|null>>  $pending
      * @param  array<string, array<string, mixed>>  $loaded
@@ -1110,8 +1120,13 @@ final class RecordEditor
                     $this->record->setTranslation($attribute, $locale, $value);
                 } else {
                     $sources = $this->sourcesAfter($locale, $attribute, $attributeSegments, $byPath, $pending[$locale] ?? [], $reviewed[$locale] ?? []);
+                    $publication = $content->publishesPartially($attribute)
+                        ? $content->partialPublication($locale, $attribute, $byPath, $sources ?? [], $this->cleared($attributeSegments, $pending[$locale] ?? []))
+                        : null;
 
-                    if ($value === null) {
+                    if ($publication !== null) {
+                        $this->writePartially($locale, $attribute, $value, $byPath, $sources, $publication);
+                    } elseif ($value === null) {
                         // Cleared: the draft, if there is one, or else the translation.
                         $content->draft($locale, $attribute) !== null
                             ? $this->record->forgetTranslationDraft($attribute, $locale)
@@ -1133,6 +1148,65 @@ final class RecordEditor
         }
 
         return array_map('strval', array_keys($changed));
+    }
+
+    /**
+     * Publish a working copy partially: readers get the publication (see
+     * RecordContent::partialPublication()); the draft keeps what readers
+     * don't get yet, and is forgotten when they get all of it. What is
+     * published changes only when the publication does.
+     *
+     * @param  array<string, string>  $texts  the working copy by path
+     * @param  array<string, string>|null  $sources  the working copy's
+     * @param  array{texts: array<string, string>, sources: array<string, string>}  $publication
+     *
+     * @throws InvalidTranslation
+     */
+    private function writePartially(string $locale, string $attribute, mixed $value, array $texts, ?array $sources, array $publication): void
+    {
+        $content = $this->content();
+        $published = $content->alignment($locale, $attribute, published: true)->texts;
+        $publishedSources = array_intersect_key($content->sources($locale, $attribute, published: true), $published);
+
+        if (! RecordContent::sameTexts($publication['texts'], $published) || $publication['sources'] != $publishedSources) {
+            try {
+                $publishedValue = $publication['texts'] === [] ? null : $this->schema()->node($attribute)->rebuild('', $content->sourceValue($attribute), $publication['texts']);
+            } catch (InvalidTranslation $exception) {
+                $exception->locale = $locale;
+                $exception->key = Segment::keyOf($exception->path === null || $exception->path === '' ? $attribute : $attribute.'/'.$exception->path);
+
+                throw $exception;
+            }
+
+            $this->record->setTranslation($attribute, $locale, $publishedValue)
+                ->setTranslationSource($attribute, $locale, $publication['sources'] === [] ? null : $publication['sources']);
+        }
+
+        if ($value === null || RecordContent::sameTexts($texts, $publication['texts'])) {
+            $this->record->forgetTranslationDraft($attribute, $locale);
+        } else {
+            $this->record->setTranslationDraft($attribute, $locale, $value, $sources);
+        }
+    }
+
+    /**
+     * The paths of the attribute's segments a save cleared.
+     *
+     * @param  array<string, Segment>  $segments  the attribute's, by key
+     * @param  array<string, string|null>  $touched  changed segments by key
+     * @return list<string>
+     */
+    private function cleared(array $segments, array $touched): array
+    {
+        $paths = [];
+
+        foreach ($touched as $key => $text) {
+            if (isset($segments[$key]) && (! is_string($text) || trim($text) === '')) {
+                $paths[] = $segments[$key]->path;
+            }
+        }
+
+        return $paths;
     }
 
     /**

@@ -23,6 +23,16 @@ final class Alignment
      */
     public array $orphans = [];
 
+    /**
+     * The orphans whose place the source still has, in another structure
+     * (an item with other data, a document with other blocks), unlike
+     * those of removed items or texts. Rebuilding from the source would
+     * lose them, so a partial translation is never published over them.
+     *
+     * @var list<string>
+     */
+    public array $restructured = [];
+
     public static function join(string $path, string $part): string
     {
         return $path === '' ? $part : $path.'/'.$part;
